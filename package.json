@@ -1,0 +1,12 @@
+{
+  "name": "@xmlui-org/trace-tools",
+  "version": "0.1.0",
+  "description": "Capture, replay, and compare XMLUI app traces via Playwright",
+  "scripts": {
+    "test": "npx playwright test",
+    "trace": "bash trace.sh"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.0"
+  }
+}

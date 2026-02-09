@@ -1,0 +1,5 @@
+node_modules/
+.auth-state.json
+captured-trace.json
+generated-*.spec.ts
+test-results/
