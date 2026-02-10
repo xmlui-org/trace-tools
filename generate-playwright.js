@@ -20,9 +20,23 @@ function generatePlaywright(normalized, options = {}) {
   const otherSteps = normalized.steps.filter(s => s.action !== 'startup');
   const orderedSteps = startupStep ? [startupStep, ...otherSteps] : otherSteps;
 
+  // Detect starting page: if the first interaction has navigate.from on a
+  // non-root path, the trace was captured on a subpage and the test needs
+  // to navigate there after the initial goto('/')
+  const firstInteraction = otherSteps[0];
+  const startingPage = firstInteraction?.await?.navigate?.from;
+
   for (const step of orderedSteps) {
     lines.push('');
     lines.push(...generateStepCode(step));
+
+    // After startup, navigate to the starting page if it's not the root
+    if (step.action === 'startup' && startingPage && startingPage !== '/') {
+      lines.push('');
+      lines.push(`  // Navigate to starting page (trace was captured on ${startingPage})`);
+      lines.push(`  await page.goto('.${startingPage}');`);
+      lines.push(`  await page.waitForLoadState('networkidle');`);
+    }
   }
 
   lines.push(`});`);
