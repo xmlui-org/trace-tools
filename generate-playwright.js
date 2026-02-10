@@ -256,7 +256,8 @@ if (require.main === module) {
   const configPath = fs.existsSync(parentConfig) ? parentConfig : (fs.existsSync(localConfig) ? localConfig : null);
   if (configPath) {
     try {
-      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      const raw = fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''); // strip BOM
+      const config = JSON.parse(raw);
       if (config.appGlobals?.useHashBasedRouting === false) {
         useHashRouting = false;
       }
