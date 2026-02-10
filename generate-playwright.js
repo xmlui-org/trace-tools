@@ -20,6 +20,10 @@ function generatePlaywright(normalized, options = {}) {
   const otherSteps = normalized.steps.filter(s => s.action !== 'startup');
   const orderedSteps = startupStep ? [startupStep, ...otherSteps] : otherSteps;
 
+  // Pre-pass: match textbox interactions to formData fields so we can
+  // generate fills using actual ariaNames instead of field-name guesses.
+  const fillPlan = buildFillPlan(orderedSteps);
+
   // Detect starting page: if the first interaction has navigate.from on a
   // non-root path, the trace was captured on a subpage and the test needs
   // to navigate there after the initial goto('/')
@@ -28,7 +32,7 @@ function generatePlaywright(normalized, options = {}) {
 
   for (const step of orderedSteps) {
     lines.push('');
-    lines.push(...generateStepCode(step));
+    lines.push(...generateStepCode(step, fillPlan));
 
     // After startup, navigate to the starting page if it's not the root.
     // XMLUI apps use client-side routing, so page.goto() won't work —
@@ -80,7 +84,79 @@ function generatePlaywright(normalized, options = {}) {
   return lines.join('\n');
 }
 
-function generateStepCode(step) {
+/**
+ * Pre-scan steps to match textbox click interactions to formData fields.
+ * Returns a plan: which textbox clicks get fill() calls, and which formData
+ * fields on the submit button are already covered (so we don't duplicate).
+ */
+function buildFillPlan(steps) {
+  // Find the submit step (click with formData)
+  const submitStep = steps.find(s =>
+    s.action === 'click' && s.target?.formData && typeof s.target.formData === 'object'
+  );
+  if (!submitStep) return { fills: new Map(), coveredFields: new Set() };
+
+  const formData = submitStep.target.formData;
+  const stringFields = Object.entries(formData).filter(([, v]) => typeof v === 'string');
+
+  // Find textbox clicks with ariaName (these are fields the user interacted with)
+  const textboxClicks = steps.filter(s =>
+    s.action === 'click' && s.target?.ariaRole === 'textbox' && s.target?.ariaName
+  );
+
+  const fills = new Map(); // ariaName → { fieldName, value }
+  const coveredFields = new Set();
+
+  for (const click of textboxClicks) {
+    const ariaName = click.target.ariaName;
+    let bestMatch = null;
+    let bestScore = 0;
+
+    for (const [fieldName, value] of stringFields) {
+      if (coveredFields.has(fieldName)) continue;
+      const score = fieldMatchScore(fieldName, ariaName);
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = { fieldName, value };
+      }
+    }
+
+    if (bestMatch) {
+      fills.set(ariaName, bestMatch);
+      coveredFields.add(bestMatch.fieldName);
+    }
+  }
+
+  return { fills, coveredFields };
+}
+
+/**
+ * Score how well a formData field name matches a UI label (ariaName).
+ * Higher = better match.
+ *   "password" vs "Password:" → high (exact word match)
+ *   "name" vs "User Name:" → medium (partial word match)
+ *   "rootDirectory" vs "Home Directory:" → low (only "directory" matches)
+ */
+function fieldMatchScore(fieldName, ariaName) {
+  const normalizedAria = ariaName.toLowerCase().replace(/[:\s*]+/g, '');
+  const normalizedField = fieldName.toLowerCase();
+
+  // Exact match after normalization
+  if (normalizedAria === normalizedField) return 100;
+
+  // Full field name appears in ariaName
+  if (normalizedAria.includes(normalizedField)) return 50 + normalizedField.length;
+
+  // Split camelCase field name into words and check each
+  const parts = fieldName.replace(/([A-Z])/g, ' $1').toLowerCase().trim().split(/\s+/);
+  const matchedLength = parts
+    .filter(p => normalizedAria.includes(p))
+    .reduce((sum, p) => sum + p.length, 0);
+
+  return matchedLength;
+}
+
+function generateStepCode(step, fillPlan) {
   const lines = [];
   const indent = '  ';
 
@@ -103,35 +179,34 @@ function generateStepCode(step) {
       }
       break;
 
-    case 'click':
-      // Skip clicks on unnamed form inputs — these are just focus events
-      // before typing. The form submit step handles actual data entry.
+    case 'click': {
+      // Skip clicks on unnamed form inputs — just focus noise
       if (step.target?.ariaRole && !step.target?.ariaName &&
           ['textbox', 'textarea'].includes(step.target.ariaRole) &&
           !step.target?.formData) {
-        lines.pop(); // Remove the comment
+        lines.pop();
         return [];
       }
-      const clickLines = generateClickCode(step, indent);
+      const clickLines = generateClickCode(step, indent, 'click', fillPlan);
       lines.push(...clickLines);
       if (clickLines._skipAwait) {
-        return lines; // Skip await code for tree navigation
+        return lines;
       }
       break;
+    }
 
     case 'contextmenu':
       lines.push(...generateContextMenuCode(step, indent));
       break;
 
     case 'dblclick':
-      lines.push(...generateClickCode(step, indent, 'dblclick'));
+      lines.push(...generateClickCode(step, indent, 'dblclick', fillPlan));
       break;
 
     case 'keydown':
-      // Skip keydown events - they represent typing but we don't capture the full text
-      // The form submit will be captured separately
-      lines.pop(); // Remove the comment we added
-      return []; // Return empty to skip this step entirely
+      // Skip keydown events — typing is captured via fill() on the textbox click
+      lines.pop();
+      return [];
 
     default:
       lines.push(`${indent}// TODO: handle action "${step.action}"`);
@@ -145,7 +220,7 @@ function generateStepCode(step) {
   return lines;
 }
 
-function generateClickCode(step, indent, method = 'click') {
+function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
   const lines = [];
   const label = step.target?.label;
   const ariaRole = step.target?.ariaRole;
@@ -153,14 +228,19 @@ function generateClickCode(step, indent, method = 'click') {
   const targetTag = step.target?.targetTag;
   const formData = step.target?.formData;
 
-  // Form submit: fill text fields, then click the submit button.
-  // Use getByRole('textbox') to target only text inputs (not checkboxes),
-  // with a regex name match since model field names don't always match
-  // the UI label exactly (e.g. "rootDirectory" → "Root Directory" but
-  // the form label might be "Home Directory").
+  // Textbox click with ariaName: generate fill() if we matched a formData field
+  if (ariaRole === 'textbox' && ariaName && fillPlan.fills?.has(ariaName)) {
+    const { value } = fillPlan.fills.get(ariaName);
+    lines.push(`${indent}await page.getByRole('textbox', { name: '${ariaName}' }).fill('${value.replace(/'/g, "\\'")}');`);
+    return lines;
+  }
+
+  // Form submit button: fill any remaining string fields NOT covered by
+  // textbox interactions, then click the button.
   if (formData && typeof formData === 'object') {
+    const coveredFields = fillPlan.coveredFields || new Set();
     for (const [fieldName, fieldValue] of Object.entries(formData)) {
-      if (typeof fieldValue === 'string') {
+      if (typeof fieldValue === 'string' && !coveredFields.has(fieldName)) {
         const labelName = fieldName.charAt(0).toUpperCase() + fieldName.slice(1).replace(/([A-Z])/g, ' $1');
         lines.push(`${indent}await page.getByRole('textbox', { name: /${labelName}/i }).fill('${fieldValue.replace(/'/g, "\\'")}');`);
       }
