@@ -1,5 +1,7 @@
 node_modules/
 .auth-state.json
+app-config.json
 captured-trace.json
 generated-*.spec.ts
 test-results/
+package-lock.json

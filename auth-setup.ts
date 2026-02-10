@@ -2,7 +2,9 @@ import { test as setup } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const configPath = path.join(__dirname, 'app-config.json');
+const parentConfigPath = path.join(__dirname, '..', 'app-config.json');
+const localConfigPath = path.join(__dirname, 'app-config.json');
+const configPath = fs.existsSync(parentConfigPath) ? parentConfigPath : localConfigPath;
 const storageStatePath = path.join(__dirname, '.auth-state.json');
 
 setup('authenticate', async ({ page }) => {

@@ -1,8 +1,10 @@
 import { defineConfig } from '@playwright/test';
 import * as fs from 'fs';
 
-// Load app config if present
-const appConfigPath = './app-config.json';
+// Load app config if present (check parent dir first, then local)
+const parentConfigPath = '../app-config.json';
+const localConfigPath = './app-config.json';
+const appConfigPath = fs.existsSync(parentConfigPath) ? parentConfigPath : localConfigPath;
 const appConfig = fs.existsSync(appConfigPath)
   ? JSON.parse(fs.readFileSync(appConfigPath, 'utf8'))
   : {};
