@@ -62,15 +62,16 @@ function generatePlaywright(normalized, options = {}) {
     const testStart = lines.findIndex(l => l.includes("test('"));
     const testEnd = lines.length - 1;
 
-    // Insert try after test opening, with XMLUI error detection
-    lines.splice(testStart + 1, 0, `  try {
-
+    // Insert error collection before try, and try block after
+    lines.splice(testStart + 1, 0, `
   // Collect XMLUI runtime errors (ErrorBoundary, script errors, toast messages)
   const _xsErrors: string[] = [];
   page.on('console', msg => {
     if (msg.type() === 'error') _xsErrors.push(msg.text());
   });
-  page.on('pageerror', err => _xsErrors.push(err.message));`);
+  page.on('pageerror', err => _xsErrors.push(err.message));
+
+  try {`);
 
     // Replace closing with finally block - handle browser already closed
     lines[lines.length - 1] = `  } finally {
