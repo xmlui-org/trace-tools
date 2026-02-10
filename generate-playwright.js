@@ -62,8 +62,15 @@ function generatePlaywright(normalized, options = {}) {
     const testStart = lines.findIndex(l => l.includes("test('"));
     const testEnd = lines.length - 1;
 
-    // Insert try after test opening
-    lines.splice(testStart + 1, 0, '  try {');
+    // Insert try after test opening, with XMLUI error detection
+    lines.splice(testStart + 1, 0, `  try {
+
+  // Collect XMLUI runtime errors (ErrorBoundary, script errors, toast messages)
+  const _xsErrors: string[] = [];
+  page.on('console', msg => {
+    if (msg.type() === 'error') _xsErrors.push(msg.text());
+  });
+  page.on('pageerror', err => _xsErrors.push(err.message));`);
 
     // Replace closing with finally block - handle browser already closed
     lines[lines.length - 1] = `  } finally {
@@ -74,8 +81,19 @@ function generatePlaywright(normalized, options = {}) {
       const traceFile = process.env.TRACE_OUTPUT || 'captured-trace.json';
       fs.writeFileSync(traceFile, JSON.stringify(logs, null, 2));
       console.log(\`Trace captured to \${traceFile} (\${logs.length} events)\`);
+      // Report XMLUI errors from _xsLogs
+      const errors = logs.filter((e: any) => e.kind?.startsWith('error'));
+      if (errors.length > 0) {
+        console.log('\\nXMLUI RUNTIME ERRORS:');
+        errors.forEach((e: any) => console.log(\`  [\${e.kind}] \${e.error || e.text || JSON.stringify(e)}\`));
+      }
     } catch (e) {
       console.log('Could not capture trace (browser may have closed)');
+    }
+    // Report console errors collected during the test
+    if (_xsErrors.length > 0) {
+      console.log('\\nBROWSER ERRORS:');
+      _xsErrors.forEach(e => console.log(\`  \${e}\`));
     }
   }
 });`;
