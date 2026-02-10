@@ -34,8 +34,10 @@ function generatePlaywright(normalized, options = {}) {
     if (step.action === 'startup' && startingPage && startingPage !== '/') {
       lines.push('');
       lines.push(`  // Navigate to starting page (trace was captured on ${startingPage})`);
-      lines.push(`  await page.goto('.${startingPage}');`);
-      lines.push(`  await page.waitForLoadState('networkidle');`);
+      lines.push(`  await Promise.all([`);
+      lines.push(`    page.waitForResponse(r => r.url().includes('${startingPage.replace(/^\//, '')}')),`);
+      lines.push(`    page.goto('.${startingPage}'),`);
+      lines.push(`  ]);`);
     }
   }
 
