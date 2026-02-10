@@ -235,17 +235,9 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
     return lines;
   }
 
-  // Form submit button: fill any remaining string fields NOT covered by
-  // textbox interactions, then click the button.
-  if (formData && typeof formData === 'object') {
-    const coveredFields = fillPlan.coveredFields || new Set();
-    for (const [fieldName, fieldValue] of Object.entries(formData)) {
-      if (typeof fieldValue === 'string' && !coveredFields.has(fieldName)) {
-        const labelName = fieldName.charAt(0).toUpperCase() + fieldName.slice(1).replace(/([A-Z])/g, ' $1');
-        lines.push(`${indent}await page.getByRole('textbox', { name: /${labelName}/i }).fill('${fieldValue.replace(/'/g, "\\'")}');`);
-      }
-    }
-  }
+  // Form submit button: only fill fields the user actually interacted with
+  // (handled above via fillPlan). Fields the user didn't touch have defaults
+  // and should not be filled — their field names often don't match UI labels.
 
   // Best: ARIA role + name → getByRole(role, { name })
   if (ariaRole && ariaName) {
