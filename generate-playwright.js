@@ -31,14 +31,14 @@ function generatePlaywright(normalized, options = {}) {
     lines.push(...generateStepCode(step));
 
     // After startup, navigate to the starting page if it's not the root.
-    // Use hash or standard URL depending on the app's routing mode, then
-    // wait for the first interaction target to be visible.
+    // XMLUI apps use client-side routing, so page.goto() won't work —
+    // click the nav label instead (path /users → click "USERS"), then
+    // wait for the first interaction target to confirm the page rendered.
     if (step.action === 'startup' && startingPage && startingPage !== '/') {
-      const route = startingPage.replace(/^\//, '');
-      const gotoPath = useHashRouting ? `./#/${route}` : `./${route}`;
+      const navLabel = startingPage.replace(/^\//, '').toUpperCase();
       lines.push('');
       lines.push(`  // Navigate to starting page (trace was captured on ${startingPage})`);
-      lines.push(`  await page.goto('${gotoPath}');`);
+      lines.push(`  await page.getByText('${navLabel}', { exact: true }).click();`);
 
       // Wait for the first interaction's target element to confirm the page rendered
       const ft = firstInteraction?.target;
