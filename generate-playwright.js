@@ -6,7 +6,7 @@ const { parseTrace } = require('./parse-trace');
 const { normalizeTrace } = require('./normalize-trace');
 
 function generatePlaywright(normalized, options = {}) {
-  const { testName = 'user-journey', baseUrl = '/', captureTrace = true } = options;
+  const { testName = 'user-journey', baseUrl = '/', captureTrace = true, useHashRouting = true } = options;
 
   const lines = [
     `import { test, expect } from '@playwright/test';`,
@@ -30,14 +30,23 @@ function generatePlaywright(normalized, options = {}) {
     lines.push('');
     lines.push(...generateStepCode(step));
 
-    // After startup, navigate to the starting page if it's not the root
+    // After startup, navigate to the starting page if it's not the root.
+    // Use hash or standard URL depending on the app's routing mode, then
+    // wait for the first interaction target to be visible.
     if (step.action === 'startup' && startingPage && startingPage !== '/') {
+      const route = startingPage.replace(/^\//, '');
+      const gotoPath = useHashRouting ? `./#/${route}` : `./${route}`;
       lines.push('');
       lines.push(`  // Navigate to starting page (trace was captured on ${startingPage})`);
-      lines.push(`  await Promise.all([`);
-      lines.push(`    page.waitForResponse(r => r.url().includes('${startingPage.replace(/^\//, '')}')),`);
-      lines.push(`    page.goto('.${startingPage}'),`);
-      lines.push(`  ]);`);
+      lines.push(`  await page.goto('${gotoPath}');`);
+
+      // Wait for the first interaction's target element to confirm the page rendered
+      const ft = firstInteraction?.target;
+      if (ft?.ariaRole && ft?.ariaName) {
+        lines.push(`  await page.getByRole('${ft.ariaRole}', { name: '${ft.ariaName}' }).waitFor();`);
+      } else if (ft?.label) {
+        lines.push(`  await page.getByText('${ft.label}', { exact: true }).waitFor();`);
+      }
     }
   }
 
@@ -233,11 +242,26 @@ if (typeof module !== 'undefined') {
 // CLI usage
 if (require.main === module) {
   const fs = require('fs');
+  const path = require('path');
   const { normalizeJsonLogs } = require('./normalize-trace');
 
   const inputFile = process.argv[2] || '/dev/stdin';
   const testName = process.argv[3] || 'user-journey';
   const input = fs.readFileSync(inputFile, 'utf8');
+
+  // Detect routing mode from the app's config.json (check parent dir first)
+  let useHashRouting = true; // XMLUI default
+  const parentConfig = path.join(__dirname, '..', 'config.json');
+  const localConfig = path.join(__dirname, 'config.json');
+  const configPath = fs.existsSync(parentConfig) ? parentConfig : (fs.existsSync(localConfig) ? localConfig : null);
+  if (configPath) {
+    try {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      if (config.appGlobals?.useHashBasedRouting === false) {
+        useHashRouting = false;
+      }
+    } catch (e) { /* ignore parse errors */ }
+  }
 
   let normalized;
 
@@ -252,6 +276,6 @@ if (require.main === module) {
     normalized = normalizeTrace(parsed);
   }
 
-  const playwright = generatePlaywright(normalized, { testName });
+  const playwright = generatePlaywright(normalized, { testName, useHashRouting });
   console.log(playwright);
 }
