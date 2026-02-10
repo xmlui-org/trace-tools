@@ -4,6 +4,50 @@
 
 const { parseTrace } = require('./parse-trace');
 
+/**
+ * Resolve API method that may be an unresolved XMLUI expression.
+ * The framework sometimes logs expressions like:
+ *   {$queryParams.new == 'true' ? 'post' : 'put'}
+ * instead of the actual HTTP method. This resolves them using
+ * URL query parameters when available, or extracts the first
+ * HTTP method from the expression as a fallback.
+ */
+function resolveMethod(method, url) {
+  if (!method || typeof method !== 'string') return method;
+
+  const clean = method.trim().toUpperCase();
+  if (/^(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)$/.test(clean)) {
+    return clean;
+  }
+
+  // Ternary on $queryParams: {$queryParams.foo == 'bar' ? 'post' : 'put'}
+  const ternaryMatch = method.match(
+    /\{\$queryParams\.(\w+)\s*==\s*'([^']+)'\s*\?\s*'(\w+)'\s*:\s*'(\w+)'\s*\}/
+  );
+  if (ternaryMatch) {
+    const [, paramName, paramValue, trueMethod, falseMethod] = ternaryMatch;
+    if (url) {
+      try {
+        const urlObj = new URL(url, 'http://localhost');
+        if (urlObj.searchParams.get(paramName) === paramValue) {
+          return trueMethod.toUpperCase();
+        }
+        return falseMethod.toUpperCase();
+      } catch (e) { /* fall through */ }
+    }
+    // No URL context — return the "true" branch as default
+    return trueMethod.toUpperCase();
+  }
+
+  // Generic fallback: extract the first HTTP verb from the expression
+  const verbMatch = method.match(/\b(get|post|put|delete|patch|head|options)\b/i);
+  if (verbMatch) {
+    return verbMatch[1].toUpperCase();
+  }
+
+  return method;
+}
+
 function normalizeTrace(traces) {
   const steps = [];
 
@@ -48,7 +92,7 @@ function extractStep(trace) {
 function extractStartupStep(trace) {
   const apiCalls = trace.events
     .filter(e => e.kind === 'api:complete' && e.method && e.endpoint)
-    .map(e => ({ method: e.method, endpoint: e.endpoint }));
+    .map(e => ({ method: resolveMethod(e.method, e.endpoint), endpoint: e.endpoint }));
 
   // Dedupe by method+endpoint
   const uniqueApis = [];
@@ -252,7 +296,7 @@ function extractStepFromJsonLogs(trace) {
   if (!interaction && trace.traceId?.startsWith('startup-')) {
     const apiCalls = events
       .filter(e => e.kind === 'api:complete' && e.method)
-      .map(e => ({ method: e.method, endpoint: e.url || e.endpoint }));
+      .map(e => ({ method: resolveMethod(e.method, e.url || e.endpoint), endpoint: e.url || e.endpoint }));
     return {
       action: 'startup',
       await: { api: apiCalls }
@@ -350,7 +394,7 @@ function extractStepFromJsonLogs(trace) {
 
   const apiCalls = events
     .filter(e => (e.kind === 'api:complete' || e.kind === 'api:start') && e.method)
-    .map(e => ({ method: e.method, endpoint: e.url || e.endpoint, status: e.status }));
+    .map(e => ({ method: resolveMethod(e.method, e.url || e.endpoint), endpoint: e.url || e.endpoint, status: e.status }));
   if (apiCalls.length > 0) {
     awaitConditions.api = apiCalls;
   }
@@ -369,7 +413,7 @@ function extractStepFromJsonLogs(trace) {
 
 // Export
 if (typeof module !== 'undefined') {
-  module.exports = { normalizeTrace, normalizeJsonLogs, parseTrace };
+  module.exports = { normalizeTrace, normalizeJsonLogs, parseTrace, resolveMethod };
 }
 
 // CLI usage

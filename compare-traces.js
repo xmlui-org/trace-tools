@@ -3,7 +3,7 @@
  */
 
 const { parseTrace } = require('./parse-trace');
-const { normalizeTrace, normalizeJsonLogs } = require('./normalize-trace');
+const { normalizeTrace, normalizeJsonLogs, resolveMethod } = require('./normalize-trace');
 
 /**
  * Normalize input - handles text export, JSON logs array, or already-normalized object
@@ -240,7 +240,7 @@ function extractSemantics(input) {
   const apis = logs
     .filter(e => e.kind === 'api:complete' && e.method)
     .map(e => ({
-      method: e.method.toUpperCase(),
+      method: resolveMethod(e.method, e.url || e.endpoint),
       endpoint: (e.url || '').split('?')[0].replace(/^.*\/api/, ''),
       status: e.status
     }));
