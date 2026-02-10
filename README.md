@@ -74,6 +74,20 @@ Make sure the app is running before running tests:
 - **Standalone apps**: start the app server (e.g. for core-ssh-server-ui, the app serves at `http://localhost:8123/ui/`)
 - **Dev-environment apps**: run `npm run dev` (serves at `http://localhost:5173` by default)
 
+## Capturing a trace
+
+Open the XMLUI inspector in the running app and perform the user journey you want to test. When done, use the inspector's Export → Download JSON. The inspector prompts for a filename — use a descriptive name like `enable-disable-user` or `rename-file-roundtrip`. The browser saves it to your Downloads folder, e.g.:
+
+```
+~/Downloads/enable-disable-user.json
+```
+
+### Tips for good traces
+
+- **Design roundtrip journeys.** A trace that creates a user should also delete it, so the system ends in the same state it started. Enable/disable is naturally a roundtrip. Create/delete should be captured as one journey: create a test user, then delete it.
+- **Startup noise doesn't matter.** The trace will include initial data fetches and page render events from app startup. The normalizer ignores these and only extracts interaction steps (clicks, form submits, API calls triggered by user actions). You can use the inspector's Clear button before starting your journey if you like, but it's not necessary.
+- **One journey per trace.** Keep each trace focused on a single user journey. This makes baselines easy to name, understand, and debug when a test fails.
+
 ## Walkthrough: capturing and testing user journeys
 
 ### Example 1: enable-disable-user (core-ssh-server-ui)
@@ -177,6 +191,7 @@ Each journey you capture becomes a named baseline. Over time, the baselines dire
 ```
 traces/baselines/
 ├── enable-disable-user.json
+├── create-delete-user.json
 ├── create-api-key.json
 ├── change-password.json
 └── update-settings.json
@@ -208,16 +223,105 @@ If the behavior *should* have changed (new feature, intentional API change), pro
 
 This copies `traces/captures/enable-disable-user.json` to `traces/baselines/enable-disable-user.json`. Commit the updated baseline.
 
-## All commands
+## Commands
+
+### `./test.sh list`
+
+Lists all available baselines with their event counts.
+
+```bash
+./test.sh list
+```
 
 ```
-./test.sh list                          # List available baselines
-./test.sh save <trace.json> <journey>   # Save an exported trace as baseline
-./test.sh run <journey>                 # Generate test, run it, compare
-./test.sh run-all                       # Run all baselines
-./test.sh update <journey>              # Promote latest capture to baseline
-./test.sh compare <journey>             # Compare latest capture vs baseline
-./test.sh summary <journey>             # Show journey summary
+Available baselines:
+  enable-disable-user (143 events)
+  create-delete-user (87 events)
+```
+
+Reads filenames from `traces/baselines/*.json`. The event count is the number of raw trace events in each file.
+
+### `./test.sh save <trace.json> <journey-name>`
+
+Saves an exported trace as a named baseline.
+
+```bash
+./test.sh save ~/Downloads/enable-disable-user.json enable-disable-user
+```
+
+This copies the trace file to `traces/baselines/<journey-name>.json` and prints a journey summary showing the steps, event count, and API calls. The source file (typically in `~/Downloads/`) is left unchanged.
+
+### `./test.sh run <journey-name>`
+
+The main command. Generates a Playwright test from a baseline, runs it, captures a new trace, and compares the two.
+
+```bash
+./test.sh run enable-disable-user
+```
+
+What happens under the hood:
+
+1. **Generate**: `generate-playwright.js` reads `traces/baselines/<journey>.json`, normalizes the raw trace into interaction steps using `normalize-trace.js`, and emits a `.spec.ts` file with Playwright selectors derived from ARIA roles and accessible names.
+2. **Run**: Playwright executes the generated test. For apps with auth, a headless setup project logs in first and saves browser state. The test replays each step (clicks, form fills, waits for API responses) and captures a new trace via the XMLUI inspector.
+3. **Capture**: The new trace is saved to `traces/captures/<journey>.json`.
+4. **Compare**: `compare-traces.js` compares the baseline and capture semantically — same API calls (method + endpoint), same form submissions, same navigation. It ignores timing, DOM details, and event ordering differences.
+5. **Clean up**: The generated `.spec.ts` file is deleted.
+
+The exit code is 0 if the semantic comparison passes, even if a Playwright selector failed. This means accessibility gaps (elements without proper ARIA roles) don't block the regression check.
+
+### `./test.sh run-all`
+
+Runs every baseline in `traces/baselines/` and reports a summary.
+
+```bash
+./test.sh run-all
+```
+
+```
+--- Running: enable-disable-user ---
+...
+SEMANTIC: PASS
+
+--- Running: create-delete-user ---
+...
+SEMANTIC: PASS
+
+═══════════════════════════════════════════════════════════════
+  Results: 2 passed, 0 failed
+═══════════════════════════════════════════════════════════════
+```
+
+### `./test.sh update <journey-name>`
+
+Promotes the latest capture to become the new baseline.
+
+```bash
+./test.sh update enable-disable-user
+```
+
+Use this when the app's behavior has intentionally changed — a new API endpoint, a different form field, an added navigation step. The capture from the most recent `run` is copied to `traces/baselines/<journey>.json`, replacing the old baseline. Commit the updated baseline.
+
+### `./test.sh compare <journey-name>`
+
+Runs the semantic comparison without running a test. Useful for comparing a previously captured trace against its baseline.
+
+```bash
+./test.sh compare enable-disable-user
+```
+
+Compares `traces/baselines/<journey>.json` against `traces/captures/<journey>.json`. You must have run the test at least once to have a capture.
+
+### `./test.sh summary <journey-name>`
+
+Prints a summary of a baseline trace — the number of steps, events, and which API endpoints are called.
+
+```bash
+./test.sh summary enable-disable-user
+```
+
+```
+Journey: 10 steps, 143 events
+  APIs: GET /groups, GET /license, GET /settings, GET /status, GET /users, PUT /users/elvis
 ```
 
 ## Auth configuration
@@ -252,3 +356,20 @@ The XMLUI framework captures ARIA roles and accessible names in trace events. Th
 - `getByText('elvis', { exact: true })` — fallback when no ARIA role is available
 
 When an element lacks proper ARIA semantics, the generator emits `// ACCESSIBILITY GAP` — flagging the same problem a screen reader user would encounter. Known gaps are tracked at https://github.com/xmlui-org/trace-tools/issues.
+
+## How semantic comparison works
+
+The `compare` and `run` commands use `compare-traces.js` to check whether two traces represent the same behavior. It compares:
+
+- **API calls**: Same HTTP methods and endpoint paths, in the same order (e.g. `GET /users`, `PUT /users/elvis`)
+- **Form submissions**: Same number of submits with the same form data transformations
+- **Navigation**: Same page transitions
+
+It does **not** compare:
+
+- Timing or performance
+- DOM structure or CSS
+- Event ordering within a single step
+- Startup data fetches (initial page load API calls)
+
+This means a refactoring that restructures components but preserves the same user-visible behavior will pass the semantic comparison.
