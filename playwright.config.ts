@@ -24,6 +24,7 @@ export default defineConfig({
     ...(hasAuth ? [{
       name: 'setup',
       testMatch: /auth-setup\.ts/,
+      use: { headless: true },
     }] : []),
     {
       name: 'chromium',
