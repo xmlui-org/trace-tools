@@ -104,6 +104,14 @@ function generateStepCode(step) {
       break;
 
     case 'click':
+      // Skip clicks on unnamed form inputs — these are just focus events
+      // before typing. The form submit step handles actual data entry.
+      if (step.target?.ariaRole && !step.target?.ariaName &&
+          ['textbox', 'textarea'].includes(step.target.ariaRole) &&
+          !step.target?.formData) {
+        lines.pop(); // Remove the comment
+        return [];
+      }
       const clickLines = generateClickCode(step, indent);
       lines.push(...clickLines);
       if (clickLines._skipAwait) {
