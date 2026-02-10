@@ -153,13 +153,16 @@ function generateClickCode(step, indent, method = 'click') {
   const targetTag = step.target?.targetTag;
   const formData = step.target?.formData;
 
-  // Form submit: fill fields by label, then click the submit button
+  // Form submit: fill text fields, then click the submit button.
+  // Use getByRole('textbox') to target only text inputs (not checkboxes),
+  // with a regex name match since model field names don't always match
+  // the UI label exactly (e.g. "rootDirectory" → "Root Directory" but
+  // the form label might be "Home Directory").
   if (formData && typeof formData === 'object') {
     for (const [fieldName, fieldValue] of Object.entries(formData)) {
       if (typeof fieldValue === 'string') {
         const labelName = fieldName.charAt(0).toUpperCase() + fieldName.slice(1).replace(/([A-Z])/g, ' $1');
-        lines.push(`${indent}await page.getByLabel('${labelName}').clear();`);
-        lines.push(`${indent}await page.getByLabel('${labelName}').fill('${fieldValue}');`);
+        lines.push(`${indent}await page.getByRole('textbox', { name: /${labelName}/i }).fill('${fieldValue.replace(/'/g, "\\'")}');`);
       }
     }
   }
