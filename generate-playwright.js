@@ -126,6 +126,26 @@ function reorderFormSteps(steps) {
     return s.action === 'click' && s.target?.formData && typeof s.target.formData === 'object';
   }
 
+  // Detect interleaving: a non-keydown step appears BETWEEN two keydowns
+  // on the same textbox before the submit. This is the signal that background
+  // clicks happened while a modal form was open.
+  function hasInterleaving(steps, fillStart, submitIdx, ariaName) {
+    let sawNonKeydown = false;
+    let sawSecondKeydown = false;
+    for (let j = fillStart + 1; j < submitIdx; j++) {
+      const s = steps[j];
+      const isSameKeydown = s.action === 'keydown' && s.target?.ariaRole === 'textbox' &&
+                             s.target?.ariaName === ariaName;
+      if (!isSameKeydown) {
+        sawNonKeydown = true;
+      } else if (sawNonKeydown) {
+        sawSecondKeydown = true;
+        break;
+      }
+    }
+    return sawNonKeydown && sawSecondKeydown;
+  }
+
   // Iterate and group form sequences
   let i = 0;
   while (i < result.length) {
@@ -147,6 +167,13 @@ function reorderFormSteps(steps) {
 
       if (submitIdx === -1) { i++; continue; }
 
+      // Only reorder if keydowns on this textbox are interleaved with
+      // non-keydown steps (evidence of background clicks during modal form)
+      if (!hasInterleaving(result, fillStart, submitIdx, formAriaName)) {
+        i++;
+        continue;
+      }
+
       // Collect steps between fillStart and submitIdx. Keep only keydowns
       // on the SAME textbox (same ariaName) — these are continuation of
       // the same typing sequence. Everything else is deferred to after submit.
@@ -162,13 +189,10 @@ function reorderFormSteps(steps) {
         }
       }
 
-      // Only reorder if there are actually deferred steps
-      if (deferred.length > 0) {
-        // Rebuild: [fillStart, ...kept keydowns, submit, ...deferred]
-        const submit = result[submitIdx];
-        result.splice(fillStart + 1, submitIdx - fillStart);
-        result.splice(fillStart + 1, 0, ...kept, submit, ...deferred);
-      }
+      // Rebuild: [fillStart, ...kept keydowns, submit, ...deferred]
+      const submit = result[submitIdx];
+      result.splice(fillStart + 1, submitIdx - fillStart);
+      result.splice(fillStart + 1, 0, ...kept, submit, ...deferred);
 
       // Advance past the submit
       i = fillStart + 1 + kept.length + 1; // past submit
