@@ -396,13 +396,16 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
   if (ariaRole === 'checkbox' && ariaName?.startsWith('Select ')) {
     const rowName = ariaName.replace('Select ', '');
     lines.push(`${indent}await page.getByRole('row', { name: '${rowName}' }).hover();`);
-    lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}' }).${method}();`);
+    lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}', exact: true }).${method}();`);
     return lines;
   }
 
-  // Best: ARIA role + name → getByRole(role, { name })
+  // Best: ARIA role + name → getByRole(role, { name, exact: true })
+  // For 'row' role, skip exact since the row's accessible name is the full
+  // row text content and we're matching by the clicked cell's text
   if (ariaRole && ariaName) {
-    lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}' }).${method}();`);
+    const exact = ariaRole === 'row' ? '' : ', exact: true';
+    lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}'${exact} }).${method}();`);
     return lines;
   }
 
@@ -419,7 +422,13 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
     return lines;
   }
 
-  // No ARIA, no label — not actionable
+  // Fallback: testId when no ARIA or label
+  if (step.target?.testId) {
+    lines.push(`${indent}await page.getByTestId('${step.target.testId}').${method}();`);
+    return lines;
+  }
+
+  // No ARIA, no label, no testId — not actionable
   lines.push(`${indent}// ACCESSIBILITY GAP: ${targetTag || 'element'} has no role or accessible name`);
   return lines;
 }
@@ -431,9 +440,12 @@ function generateContextMenuCode(step, indent) {
   const label = step.target?.label;
 
   if (ariaRole && ariaName) {
-    lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}' }).click({ button: 'right' });`);
+    const exact = ariaRole === 'row' ? '' : ', exact: true';
+    lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}'${exact} }).click({ button: 'right' });`);
   } else if (label) {
     lines.push(`${indent}await page.getByText('${label}', { exact: true }).click({ button: 'right' });`);
+  } else if (step.target?.testId) {
+    lines.push(`${indent}await page.getByTestId('${step.target.testId}').click({ button: 'right' });`);
   } else {
     lines.push(`${indent}// ACCESSIBILITY GAP: context menu target has no role or accessible name`);
   }
