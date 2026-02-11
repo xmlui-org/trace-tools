@@ -35,7 +35,8 @@ your-app/
 ├── app-config.json                 # Auth + base URL config (only if needed)
 ├── traces/
 │   ├── baselines/                  # Reference traces (checked in)
-│   │   └── enable-disable-user.json
+│   │   ├── enable-disable-user.json
+│   │   └── ignore-apis.txt         # APIs to exclude from semantic comparison
 │   └── captures/                   # Output from test runs (gitignored)
 │       └── enable-disable-user.json
 └── trace-tools/                    # Cloned dependency (gitignored)
@@ -54,6 +55,7 @@ your-app/
 | `test.sh` | Yes | App-level test runner |
 | `app-config.json` | Yes (if needed) | Base URL and auth configuration |
 | `traces/baselines/*.json` | Yes | Reference traces — the "known good" behavior |
+| `traces/baselines/ignore-apis.txt` | Yes (if needed) | APIs to exclude from semantic comparison |
 | `traces/captures/*.json` | No | Output from test runs, compared against baselines |
 | `trace-tools/` | No | Cloned from github.com/xmlui-org/trace-tools |
 
@@ -374,6 +376,63 @@ It does **not** compare:
 - Startup data fetches (initial page load API calls)
 
 This means a refactoring that restructures components but preserves the same user-visible behavior will pass the semantic comparison.
+
+### Ignoring non-deterministic APIs
+
+Some apps have background API calls that fire non-deterministically — polling endpoints, startup data fetches, or license checks that may or may not appear in a given trace depending on timing. These cause false semantic failures: the baseline trace (captured in the inspector) might not include the call, but the Playwright capture (which loads the page from scratch) does.
+
+For example, core-ssh-server-ui has a `/license` DataSource in `Main.xmlui` that fetches on every page load:
+
+```xml
+<DataSource url="/license" id="licenseInfo" />
+```
+
+When the inspector trace was captured, the `/license` fetch had already completed before tracing began. But the Playwright test starts fresh with `page.goto('/')`, so it always captures `GET /license`. The semantic comparison sees an "extra" API and reports a failure — even though the app behaves identically.
+
+To handle this, create `traces/baselines/ignore-apis.txt` with one endpoint per line:
+
+```
+# APIs to ignore in semantic comparison (one endpoint per line)
+# These are polling/startup calls that fire non-deterministically
+/license
+```
+
+The test runner reads this file and passes each entry as `--ignore-api` to `compare-traces.js`, which filters matching APIs from both traces before comparing. The match is by substring, so `/license` filters out `GET /license`, `POST /license`, etc.
+
+The `ignore-apis.txt` file is app-specific — it lives in the app's `traces/baselines/` directory, not in trace-tools. Each app declares its own ignore list based on its background API patterns. Apps with no non-deterministic APIs don't need the file at all.
+
+The `--ignore-api` flag can also be used directly with `compare-traces.js`:
+
+```bash
+node compare-traces.js --semantic --ignore-api /license before.json after.json
+```
+
+## Reading the test output
+
+A test run produces three kinds of results, each telling you something different:
+
+```
+═══════════════════════════════════════════════════════════════
+                    REGRESSION TEST: create-delete-user
+═══════════════════════════════════════════════════════════════
+
+PASS — Journey completed successfully
+
+BROWSER ERRORS:
+  Failed to load resource: the server responded with a status of 400 (Bad Request)
+
+(ignoring APIs: /license)
+✓ Traces match semantically
+...
+SEMANTIC: PASS — Same APIs, forms, and navigation
+═══════════════════════════════════════════════════════════════
+```
+
+**PASS / FAIL** — Did the generated Playwright test complete? This runs every step in the journey: clicks, form fills, waits for API responses. PASS means all Playwright locators resolved and all actions completed. FAIL means a selector timed out — usually because a UI element lacks proper ARIA semantics (role or accessible name), so the generated `getByRole(...)` call can't find it.
+
+**SEMANTIC: PASS / FAIL** — Did the app make the same API calls? This compares the API endpoints, form submissions, and navigations between the baseline trace (captured in the inspector) and the new trace (captured by Playwright). PASS means the app's behavior is unchanged. FAIL means an API call appeared or disappeared — check whether it's a real regression or a timing artifact. If it's a timing artifact (like a polling endpoint), add it to `ignore-apis.txt`.
+
+**BROWSER ERRORS** — Console errors from the browser during the test. 400 and 404 responses from existence-check APIs (e.g. `GET /users/test` returning 400 when the user doesn't exist yet) are expected and not failures. These reflect normal app logic — the app checks whether a resource exists before creating it.
 
 ## TBD
 

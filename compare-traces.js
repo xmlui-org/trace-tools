@@ -294,7 +294,8 @@ function extractSemantics(input) {
 /**
  * Compare two traces semantically (outcomes rather than steps)
  */
-function compareSemanticTraces(trace1, trace2) {
+function compareSemanticTraces(trace1, trace2, options = {}) {
+  const { ignoreApis = [] } = options;
   const sem1 = extractSemantics(trace1);
   const sem2 = extractSemantics(trace2);
 
@@ -302,10 +303,19 @@ function compareSemanticTraces(trace1, trace2) {
     return { error: 'Semantic comparison requires JSON trace format' };
   }
 
+  // Filter out ignored APIs (match by endpoint substring)
+  const apiFilter = api => !ignoreApis.some(pattern => api.includes(pattern));
+  sem1.apis = sem1.apis.filter(apiFilter);
+  sem2.apis = sem2.apis.filter(apiFilter);
+
   const report = {
     match: true,
     differences: []
   };
+
+  if (ignoreApis.length > 0) {
+    report.ignoredApis = ignoreApis;
+  }
 
   // Compare API calls
   const missingApis = sem1.apis.filter(a => !sem2.apis.includes(a));
@@ -375,6 +385,10 @@ function formatSemanticReport(report, options = {}) {
     return lines.join('\n');
   }
 
+  if (report.ignoredApis?.length > 0) {
+    lines.push(`(ignoring APIs: ${report.ignoredApis.join(', ')})`);
+  }
+
   if (report.match) {
     lines.push('✓ Traces match semantically');
   } else {
@@ -429,10 +443,20 @@ if (require.main === module) {
   const args = process.argv.slice(2);
   const semantic = args.includes('--semantic');
   const showJourney = args.includes('--show-journey');
-  const files = args.filter(a => !a.startsWith('--'));
+
+  // Collect --ignore-api values (can be repeated)
+  const ignoreApis = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--ignore-api' && args[i + 1]) {
+      ignoreApis.push(args[i + 1]);
+      i++; // skip the value
+    }
+  }
+
+  const files = args.filter((a, i) => !a.startsWith('--') && args[i - 1] !== '--ignore-api');
 
   if (files.length < 2) {
-    console.error('Usage: node compare-traces.js [--semantic] [--show-journey] <before.json> <after.json>');
+    console.error('Usage: node compare-traces.js [--semantic] [--show-journey] [--ignore-api <endpoint>]... <before.json> <after.json>');
     process.exit(1);
   }
 
@@ -440,7 +464,7 @@ if (require.main === module) {
   const trace2 = fs.readFileSync(files[1], 'utf8');
 
   if (semantic) {
-    const report = compareSemanticTraces(trace1, trace2);
+    const report = compareSemanticTraces(trace1, trace2, { ignoreApis });
     console.log(formatSemanticReport(report, { showJourney }));
   } else {
     const report = compareTraces(trace1, trace2);

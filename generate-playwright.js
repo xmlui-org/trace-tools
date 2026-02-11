@@ -258,6 +258,15 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
   // (handled above via fillPlan). Fields the user didn't touch have defaults
   // and should not be filled — their field names often don't match UI labels.
 
+  // Checkbox in a table row: hover the row first to make the checkbox visible
+  // (XMLUI tables hide selection checkboxes until row hover)
+  if (ariaRole === 'checkbox' && ariaName?.startsWith('Select ')) {
+    const rowName = ariaName.replace('Select ', '');
+    lines.push(`${indent}await page.getByRole('row', { name: '${rowName}' }).hover();`);
+    lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}' }).${method}();`);
+    return lines;
+  }
+
   // Best: ARIA role + name → getByRole(role, { name })
   if (ariaRole && ariaName) {
     lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}' }).${method}();`);
