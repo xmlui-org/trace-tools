@@ -18,7 +18,11 @@ function generatePlaywright(normalized, options = {}) {
   // Ensure startup step comes first
   const startupStep = normalized.steps.find(s => s.action === 'startup');
   const otherSteps = normalized.steps.filter(s => s.action !== 'startup');
-  const orderedSteps = startupStep ? [startupStep, ...otherSteps] : otherSteps;
+  const preOrdered = startupStep ? [startupStep, ...otherSteps] : otherSteps;
+
+  // Reorder so form fill → submit are adjacent (modal interactions can
+  // interleave with background clicks in the captured trace).
+  const orderedSteps = reorderFormSteps(preOrdered);
 
   // Pre-pass: match textbox interactions to formData fields so we can
   // generate fills using actual ariaNames instead of field-name guesses.
@@ -101,6 +105,79 @@ function generatePlaywright(normalized, options = {}) {
   }
 
   return lines.join('\n');
+}
+
+/**
+ * Reorder steps so that form interactions (keydowns on textboxes and their
+ * submit button clicks) are grouped together. When a user types into a modal
+ * form, they may also click on elements behind the modal; the trace captures
+ * these interleaved events chronologically, but Playwright must complete the
+ * form before interacting with elements underneath.
+ *
+ * Strategy: find each textbox keydown sequence, locate its submit button,
+ * and move any non-form steps between the first keydown and the submit to
+ * after the submit.
+ */
+function reorderFormSteps(steps) {
+  const result = [...steps];
+
+  // Find submit steps (clicks with formData)
+  function isSubmit(s) {
+    return s.action === 'click' && s.target?.formData && typeof s.target.formData === 'object';
+  }
+
+  // Iterate and group form sequences
+  let i = 0;
+  while (i < result.length) {
+    const step = result[i];
+
+    // Look for the start of a form fill (keydown on textbox)
+    if (step.action === 'keydown' && step.target?.ariaRole === 'textbox') {
+      const formAriaName = step.target.ariaName;
+      const fillStart = i;
+
+      // Find the corresponding submit: next click with formData after this point
+      let submitIdx = -1;
+      for (let j = i + 1; j < result.length; j++) {
+        if (isSubmit(result[j])) {
+          submitIdx = j;
+          break;
+        }
+      }
+
+      if (submitIdx === -1) { i++; continue; }
+
+      // Collect steps between fillStart and submitIdx. Keep only keydowns
+      // on the SAME textbox (same ariaName) — these are continuation of
+      // the same typing sequence. Everything else is deferred to after submit.
+      const deferred = [];
+      const kept = [];
+      for (let j = fillStart + 1; j < submitIdx; j++) {
+        const s = result[j];
+        if (s.action === 'keydown' && s.target?.ariaRole === 'textbox' &&
+            s.target?.ariaName === formAriaName) {
+          kept.push(s);
+        } else {
+          deferred.push(s);
+        }
+      }
+
+      // Only reorder if there are actually deferred steps
+      if (deferred.length > 0) {
+        // Rebuild: [fillStart, ...kept keydowns, submit, ...deferred]
+        const submit = result[submitIdx];
+        result.splice(fillStart + 1, submitIdx - fillStart);
+        result.splice(fillStart + 1, 0, ...kept, submit, ...deferred);
+      }
+
+      // Advance past the submit
+      i = fillStart + 1 + kept.length + 1; // past submit
+    } else {
+      i++;
+    }
+  }
+
+  return result;
 }
 
 /**

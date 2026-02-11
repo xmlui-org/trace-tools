@@ -434,6 +434,10 @@ SEMANTIC: PASS — Same APIs, forms, and navigation
 
 **BROWSER ERRORS** — Console errors from the browser during the test. 400 and 404 responses from existence-check APIs (e.g. `GET /users/test` returning 400 when the user doesn't exist yet) are expected and not failures. These reflect normal app logic — the app checks whether a resource exists before creating it.
 
+## Known limitations
+
+- **Interleaved form interactions.** When capturing a trace, if you interact with elements behind a modal form while the form is still open (e.g. clicking a file in the background while a New Folder dialog is open, or starting a second form before submitting the first), the trace records these events chronologically — interleaved with the form's keydown events. The test generator groups form fill and submit steps together and defers background interactions to after the submit, but it cannot handle two different forms whose interactions overlap in the trace. For best results, complete one form before starting another. We aim to improve tolerance of real-world stop-and-start behavior, potentially by reconstructing fill values from keydown sequences, but for now cleaner captures produce more reliable tests.
+
 ## TBD
 
 - **Resilience to XMLUI core rendering changes.** The test generator produces Playwright selectors from ARIA roles and accessible names captured in the trace. These depend on how the XMLUI framework renders components to the DOM — what HTML elements are used, how labels are associated with inputs, which elements get implicit ARIA roles. When the framework's rendering changes (e.g. a form input component switches from `<div>` wrappers to native `<fieldset>`, or label association moves from `htmlFor` to `aria-labelledby`), the captured trace metadata may change, breaking previously working selectors. How should trace-tools handle this? Options include: pinning traces to a framework version, detecting selector failures and falling back to alternative strategies, or decoupling the semantic comparison (which is framework-agnostic) from the Playwright test generation (which is framework-sensitive).
