@@ -104,47 +104,68 @@ function generatePlaywright(normalized, options = {}) {
 }
 
 /**
- * Pre-scan steps to match textbox click interactions to formData fields.
- * Returns a plan: which textbox clicks get fill() calls, and which formData
- * fields on the submit button are already covered (so we don't duplicate).
+ * Pre-scan steps to match textbox interactions to formData fields on submit.
+ * Returns a plan: which textbox clicks/keydowns get fill() calls.
+ *
+ * Supports multiple form submissions in a single journey by pairing each
+ * textbox interaction with its nearest following submit step.
  */
 function buildFillPlan(steps) {
-  // Find the submit step (click with formData)
-  const submitStep = steps.find(s =>
-    s.action === 'click' && s.target?.formData && typeof s.target.formData === 'object'
-  );
-  if (!submitStep) return { fills: new Map(), coveredFields: new Set() };
-
-  const formData = submitStep.target.formData;
-  const stringFields = Object.entries(formData).filter(([, v]) => typeof v === 'string');
-
-  // Find textbox clicks with ariaName (these are fields the user interacted with)
-  const textboxClicks = steps.filter(s =>
-    s.action === 'click' && s.target?.ariaRole === 'textbox' && s.target?.ariaName
-  );
-
-  const fills = new Map(); // ariaName → { fieldName, value }
-  const coveredFields = new Set();
-
-  for (const click of textboxClicks) {
-    const ariaName = click.target.ariaName;
-    let bestMatch = null;
-    let bestScore = 0;
-
-    for (const [fieldName, value] of stringFields) {
-      if (coveredFields.has(fieldName)) continue;
-      const score = fieldMatchScore(fieldName, ariaName);
-      if (score > bestScore) {
-        bestScore = score;
-        bestMatch = { fieldName, value };
-      }
-    }
-
-    if (bestMatch) {
-      fills.set(ariaName, bestMatch);
-      coveredFields.add(bestMatch.fieldName);
+  // Find ALL submit steps (clicks with formData)
+  const submitSteps = [];
+  for (let i = 0; i < steps.length; i++) {
+    if (steps[i].action === 'click' && steps[i].target?.formData &&
+        typeof steps[i].target.formData === 'object') {
+      submitSteps.push({ index: i, formData: steps[i].target.formData });
     }
   }
+  if (submitSteps.length === 0) return { fills: new Map(), coveredFields: new Set() };
+
+  // For each textbox interaction, find the next submit step and match to its formData.
+  // Use a queue per ariaName so repeated interactions on the same field (e.g. two renames)
+  // each get their own fill value.
+  const fillQueues = new Map(); // ariaName → [{ fieldName, value }, ...]
+  const coveredFields = new Set();
+
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    if ((step.action === 'click' || step.action === 'keydown') &&
+        step.target?.ariaRole === 'textbox' && step.target?.ariaName) {
+      const ariaName = step.target.ariaName;
+
+      // Find the next submit step after this interaction
+      const nextSubmit = submitSteps.find(s => s.index > i);
+      if (!nextSubmit) continue;
+
+      // Skip if we already planned a fill for this ariaName for this submit
+      const queue = fillQueues.get(ariaName) || [];
+      if (queue.length > 0 && queue[queue.length - 1]._submitIndex === nextSubmit.index) continue;
+
+      const stringFields = Object.entries(nextSubmit.formData).filter(([, v]) => typeof v === 'string');
+      let bestMatch = null;
+      let bestScore = 0;
+      for (const [fieldName, value] of stringFields) {
+        const score = fieldMatchScore(fieldName, ariaName);
+        if (score > bestScore) {
+          bestScore = score;
+          bestMatch = { fieldName, value, _submitIndex: nextSubmit.index };
+        }
+      }
+
+      if (bestMatch) {
+        queue.push(bestMatch);
+        fillQueues.set(ariaName, queue);
+        coveredFields.add(bestMatch.fieldName);
+      }
+    }
+  }
+
+  // Convert queues to a Map-like interface: fills.get(ariaName) returns next value
+  const fills = {
+    has(ariaName) { return fillQueues.has(ariaName) && fillQueues.get(ariaName).length > 0; },
+    get(ariaName) { return fillQueues.get(ariaName)?.[0]; },
+    consume(ariaName) { const q = fillQueues.get(ariaName); if (q) q.shift(); }
+  };
 
   return { fills, coveredFields };
 }
@@ -222,10 +243,20 @@ function generateStepCode(step, fillPlan) {
       lines.push(...generateClickCode(step, indent, 'dblclick', fillPlan));
       break;
 
-    case 'keydown':
-      // Skip keydown events — typing is captured via fill() on the textbox click
+    case 'keydown': {
+      // Keydowns on textboxes covered by the fill plan: generate fill() on the
+      // first keydown for each form interaction, skip subsequent ones.
+      const kdAriaName = step.target?.ariaName;
+      if (step.target?.ariaRole === 'textbox' && kdAriaName && fillPlan.fills?.has(kdAriaName)) {
+        const { value } = fillPlan.fills.get(kdAriaName);
+        fillPlan.fills.consume(kdAriaName);
+        lines.push(`${indent}await page.getByRole('textbox', { name: '${kdAriaName}' }).fill('${value.replace(/'/g, "\\'")}');`);
+        return lines;
+      }
+      // Skip keydowns not covered by fill plan
       lines.pop();
       return [];
+    }
 
     default:
       lines.push(`${indent}// TODO: handle action "${step.action}"`);
@@ -250,6 +281,7 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
   // Textbox click with ariaName: generate fill() if we matched a formData field
   if (ariaRole === 'textbox' && ariaName && fillPlan.fills?.has(ariaName)) {
     const { value } = fillPlan.fills.get(ariaName);
+    fillPlan.fills.consume(ariaName);
     lines.push(`${indent}await page.getByRole('textbox', { name: '${ariaName}' }).fill('${value.replace(/'/g, "\\'")}');`);
     return lines;
   }

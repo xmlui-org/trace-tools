@@ -378,6 +378,13 @@ function extractStepFromJsonLogs(trace) {
     }
   }
 
+  // For keydown events: preserve the key
+  if (interaction.interaction === 'keydown' || interaction.eventName === 'keydown') {
+    if (interaction.detail?.key) {
+      target.key = interaction.detail.key;
+    }
+  }
+
   // Use interaction label if still not found
   if (!target.label && interaction.componentLabel) {
     const label = interaction.componentLabel;
