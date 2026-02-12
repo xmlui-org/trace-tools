@@ -432,7 +432,22 @@ if (typeof module !== 'undefined') {
 if (require.main === module) {
   const fs = require('fs');
   const input = fs.readFileSync(process.argv[2] || '/dev/stdin', 'utf8');
-  const parsed = parseTrace(input);
-  const normalized = normalizeTrace(parsed);
-  console.log(JSON.stringify(normalized, null, 2));
+  const outputFile = process.argv[3];
+
+  let normalized;
+  // Detect JSON vs text format
+  if (input.trim().startsWith('[') || input.trim().startsWith('{')) {
+    const logs = JSON.parse(input);
+    normalized = normalizeJsonLogs(logs);
+  } else {
+    const parsed = parseTrace(input);
+    normalized = normalizeTrace(parsed);
+  }
+
+  const output = JSON.stringify(normalized, null, 2);
+  if (outputFile) {
+    fs.writeFileSync(outputFile, output);
+  } else {
+    console.log(output);
+  }
 }
