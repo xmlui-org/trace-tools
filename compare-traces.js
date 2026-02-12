@@ -236,10 +236,9 @@ function extractSemantics(input) {
     return null;
   }
 
-  // Extract API calls (exclude startup-trace APIs since manually-captured
-  // baselines lose them to buffer eviction, making comparison unreliable)
+  // Extract API calls
   const apis = logs
-    .filter(e => e.kind === 'api:complete' && e.method && !(e.traceId && e.traceId.startsWith('startup-')))
+    .filter(e => e.kind === 'api:complete' && e.method)
     .map(e => ({
       method: resolveMethod(e.method, e.url || e.endpoint),
       endpoint: (e.url || '').split('?')[0].replace(/^.*\/api/, ''),
