@@ -110,7 +110,7 @@ Open the XMLUI inspector in the running app and perform the user journey you wan
 
 - **Start from the app's root URL.** The generated test always begins at the app's root (e.g. `http://localhost:8123/ui/`). If your journey happens on a subpage like `/users`, include the navigation click (e.g. clicking "USERS" in the sidebar) as part of the trace. If you navigate to the subpage first and then start capturing, the test won't know how to get there.
 - **Design roundtrip journeys.** A trace that creates a user should also delete it, so the system ends in the same state it started. Enable/disable is naturally a roundtrip. Create/delete should be captured as one journey: create a test user, then delete it. This ensures the test is repeatable — running it twice produces the same result.
-- **Don't worry about being clean.** Extra clicks, hesitations, and accidental interactions are fine. The initial capture just needs to be functionally correct — hitting the right APIs, submitting the right forms, navigating the right pages. On the first passing replay, auto-update replaces the messy human capture with a clean Playwright capture (see [Opt-in chaos](#opt-in-chaos)).
+- **Don't worry about being clean.** Extra clicks, hesitations, and accidental interactions are fine. The initial capture just needs to be functionally correct — hitting the right APIs, submitting the right forms, navigating the right pages. On the first passing replay, auto-update replaces the messy human capture with a clean Playwright capture (see [Opt-in chaos](#opt-in-chaos) under Auto-update).
 - **Startup noise doesn't matter.** The trace will include initial data fetches and page render events from app startup. The distiller ignores these and only extracts interaction steps (clicks, form submits, API calls triggered by user actions). You can use the inspector's Clear button before starting your journey if you like, but it's not necessary.
 - **One journey per trace.** Keep each trace focused on a single user journey. This makes baselines easy to name, understand, and debug when a test fails.
 
@@ -551,6 +551,8 @@ The `.prev.json` preserves the prior version. For the first auto-update, that's 
 # What changed between the human capture and the clean replay?
 node trace-tools/compare-traces.js --semantic traces/baselines/rename-file-roundtrip.prev.json traces/baselines/rename-file-roundtrip.json
 ```
+
+### Opt-in chaos
 
 If the `.prev.json` reveals something interesting — an API call that only fires during slow human interaction, a modal that only appears when you pause between steps — that's a signal worth investigating. The chaos found it; the clean baseline wouldn't have.
 
