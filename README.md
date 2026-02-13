@@ -130,10 +130,13 @@ For myWorkDrive-Client, the fixture contains:
 
 ```
 traces/fixtures/shares/Documents/
-  test.xlsx                          # Used by copy-paste and cut-paste tests
+  test.xlsx                          # Used by copy-paste, cut-paste, and conflict tests
   xs-diff-20260127T035521.html       # Used by rename test
-  foo/                               # Target folder for paste operations
+  foo/                               # Target folder for paste and navigation tests
     .gitkeep
+    hello.txt                        # File inside foo (verifies folder contents)
+    bar/                             # Nested folder for breadcrumb navigation
+      .gitkeep
 ```
 
 ### Why roundtrips matter for fixtures
@@ -199,9 +202,17 @@ PASS — Journey completed successfully
 
 Before:
   APIs: GET /groups, GET /license, GET /settings, GET /status, GET /users, PUT /users/elvis
+  API errors: (none)
+  Mutations: PUT /users/elvis ×2
+  Form submits: 0 ()
+  Context menus:
 
 After:
   APIs: GET /groups, GET /license, GET /settings, GET /status, GET /users, PUT /users/elvis
+  API errors: (none)
+  Mutations: PUT /users/elvis ×2
+  Form submits: 0 ()
+  Context menus:
 
 SEMANTIC: PASS — Same APIs, forms, and navigation
 
@@ -413,7 +424,9 @@ When an element lacks proper ARIA semantics, the generator emits `// ACCESSIBILI
 
 The `compare` and `run` commands use `compare-traces.js` to check whether two traces represent the same behavior. It compares:
 
-- **API calls**: Same HTTP methods and endpoint paths, in the same order (e.g. `GET /users`, `PUT /users/elvis`)
+- **API calls**: Same HTTP methods and endpoint paths (e.g. `GET /users`, `PUT /users/elvis`)
+- **API errors**: Same set of endpoints that returned error responses (409 conflict, 417 not-empty, etc.). These are logged as `api:error` events and indicate error-handling code paths like conflict dialogs or retry logic.
+- **Mutation counts**: Same number of successful POST/PUT/DELETE/PATCH calls per endpoint. A journey that deletes 2 files must always delete 2 files — not 1, not 3. GET counts are excluded because they vary with timing (refresh, polling).
 - **Form submissions**: Same number of submits with the same form data transformations
 - **Navigation**: Same page transitions
 
@@ -423,8 +436,10 @@ It does **not** compare:
 - DOM structure or CSS
 - Event ordering within a single step
 - Startup data fetches (initial page load API calls)
+- GET request counts (vary with refresh/polling)
+- HTTP status codes on error responses (the XMLUI runtime logs `api:error` without the status code)
 
-This means a refactoring that restructures components but preserves the same user-visible behavior will pass the semantic comparison.
+This means a refactoring that restructures components but preserves the same user-visible behavior will pass the semantic comparison. But changing the number of mutations (e.g. adding an extra delete) or introducing/removing an error path (e.g. a 409 conflict) will fail.
 
 ### Ignoring non-deterministic APIs
 
@@ -468,15 +483,24 @@ A test run produces several kinds of results:
 PASS — Journey completed successfully
 
 MODALS:
-  Create new folder | Create new folder
-Add a folder to organize your files.
-Name*
-Cancel
-Create
-close
+  Create new folder | Create new folder ...
   Are you sure you want to delete folder "test"? | ...
 
 VISIBLE ROWS: foo
+
+Before:
+  APIs: GET /ListFolder, GET /ListShares, POST /CreateFile, POST /DeleteFolder
+  API errors: (none)
+  Mutations: POST /CreateFile ×1, POST /DeleteFolder ×1
+  Form submits: 1 (test)
+  Context menus:
+
+After:
+  APIs: GET /ListFolder, GET /ListShares, POST /CreateFile, POST /DeleteFolder
+  API errors: (none)
+  Mutations: POST /CreateFile ×1, POST /DeleteFolder ×1
+  Form submits: 1 (test)
+  Context menus:
 
 SEMANTIC: PASS — Same APIs, forms, and navigation
 ═══════════════════════════════════════════════════════════════
@@ -488,7 +512,7 @@ SEMANTIC: PASS — Same APIs, forms, and navigation
 
 **VISIBLE ROWS** — Table rows visible at the end of the test. Helps diagnose selector failures when a test expects a file or folder that isn't present.
 
-**SEMANTIC: PASS / FAIL** — Did the app make the same API calls? This compares the API endpoints, form submissions, and navigations between the baseline trace and the new trace. PASS means the app's behavior is unchanged. FAIL means an API call appeared or disappeared — check whether it's a real regression or a timing artifact.
+**SEMANTIC: PASS / FAIL** — Did the app behave the same way? This compares API endpoints, API errors (409/417 etc.), mutation counts (POST/PUT/DELETE per endpoint), form submissions, and navigations between the baseline and capture. PASS means all dimensions match. FAIL means something changed — a missing API call, a different number of mutations, an error path that appeared or disappeared.
 
 **BROWSER ERRORS** — Console errors from the browser during the test. Opt-in via `--browser-errors`:
 

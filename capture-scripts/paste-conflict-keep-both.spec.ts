@@ -1,0 +1,67 @@
+import { test } from '@playwright/test';
+import * as fs from 'fs';
+
+test('paste-conflict-keep-both', async ({ page }) => {
+  try {
+    // Startup
+    await Promise.all([
+      page.waitForResponse(r => r.url().includes('ListShares')),
+      page.goto('./'),
+    ]);
+
+    // Copy test.xlsx
+    await page.getByRole('row').filter({ has: page.getByRole('cell', { name: 'test.xlsx', exact: true }) }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Copy', exact: true }).click();
+
+    // Navigate into foo
+    await page.getByRole('row').filter({ has: page.getByRole('cell', { name: 'foo', exact: true }) }).dblclick();
+    await page.waitForResponse(r => r.url().includes('ListFolder'));
+
+    // First paste — no conflict
+    await page.getByRole('row').filter({ has: page.getByRole('cell', { name: 'hello.txt', exact: true }) }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Paste', exact: true }).click();
+    await page.getByRole('button', { name: 'Copy', exact: true }).click();
+    await page.waitForResponse(r => r.url().includes('CopyFile'));
+    await page.getByRole('row').filter({ has: page.getByRole('cell', { name: 'test.xlsx', exact: true }) }).waitFor();
+
+    // Second paste — triggers 409 conflict
+    await page.getByRole('row').filter({ has: page.getByRole('cell', { name: 'hello.txt', exact: true }) }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Paste', exact: true }).click();
+    await page.getByRole('button', { name: 'Copy', exact: true }).click();
+
+    // Conflict dialog — click "Keep both" (creates renamed copy)
+    await page.getByRole('button', { name: 'Keep both', exact: true }).click();
+    await page.waitForResponse(r => r.url().includes('CopyFile'));
+
+    // Wait for the renamed copy to appear (e.g. "test (1).xlsx")
+    await page.waitForTimeout(500);
+
+    // Clean up: delete both test.xlsx and the renamed copy
+    // Delete test.xlsx
+    await page.getByRole('row').filter({ has: page.getByRole('cell', { name: 'test.xlsx', exact: true }) }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Delete', exact: true }).click();
+    await page.getByRole('button', { name: 'Delete', exact: true }).click();
+    await page.waitForResponse(r => r.url().includes('DeleteFile'));
+
+    // Delete the renamed copy — find it by partial match
+    await page.waitForTimeout(500);
+    const renamedRow = page.getByRole('row').filter({ has: page.getByRole('cell', { name: /test.*\.xlsx/ }) });
+    if (await renamedRow.count() > 0) {
+      await renamedRow.first().click({ button: 'right' });
+      await page.getByRole('menuitem', { name: 'Delete', exact: true }).click();
+      await page.getByRole('button', { name: 'Delete', exact: true }).click();
+      await page.waitForResponse(r => r.url().includes('DeleteFile'));
+    }
+
+  } finally {
+    try {
+      await page.waitForTimeout(500);
+      const logs = await page.evaluate(() => (window as any)._xsLogs || []);
+      const traceFile = process.env.TRACE_OUTPUT || 'captured-trace.json';
+      fs.writeFileSync(traceFile, JSON.stringify(logs, null, 2));
+      console.log(`Trace captured to ${traceFile} (${logs.length} events)`);
+    } catch (e) {
+      console.log('Could not capture trace');
+    }
+  }
+});

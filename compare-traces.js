@@ -248,6 +248,24 @@ function extractSemantics(input) {
   // Unique API signatures (method + endpoint)
   const uniqueApis = [...new Set(apis.map(a => `${a.method} ${a.endpoint}`))].sort();
 
+  // Extract API errors (409 conflict, 417 not-empty, etc.)
+  const apiErrors = logs
+    .filter(e => e.kind === 'api:error' && e.method)
+    .map(e => ({
+      method: resolveMethod(e.method, e.url || e.endpoint),
+      endpoint: (e.url || '').split('?')[0].replace(/^.*\/api/, '')
+    }));
+  const uniqueApiErrors = [...new Set(apiErrors.map(a => `${a.method} ${a.endpoint}`))].sort();
+
+  // Count mutations (POST/PUT/DELETE/PATCH completions — user-initiated actions)
+  const mutationCounts = {};
+  apis
+    .filter(a => ['POST', 'PUT', 'DELETE', 'PATCH'].includes(a.method))
+    .forEach(a => {
+      const key = `${a.method} ${a.endpoint}`;
+      mutationCounts[key] = (mutationCounts[key] || 0) + 1;
+    });
+
   // Extract form submits
   const formSubmits = logs
     .filter(e => e.kind === 'handler:start' && e.eventName === 'submit')
@@ -284,6 +302,8 @@ function extractSemantics(input) {
   return {
     apis: uniqueApis,
     apiCount: apis.length,
+    apiErrors: uniqueApiErrors,
+    mutationCounts,
     formSubmits,
     navigations: uniqueNavigations,
     contextMenus,
@@ -334,6 +354,43 @@ function compareSemanticTraces(trace1, trace2, options = {}) {
       type: 'apis_extra',
       message: `APIs in after but not before: ${extraApis.join(', ')}`
     });
+  }
+
+  // Compare API errors
+  const missingErrors = sem1.apiErrors.filter(a => !sem2.apiErrors.includes(a));
+  const extraErrors = sem2.apiErrors.filter(a => !sem1.apiErrors.includes(a));
+
+  if (missingErrors.length > 0) {
+    report.match = false;
+    report.differences.push({
+      type: 'api_errors_missing',
+      message: `API errors in before but not after: ${missingErrors.join(', ')}`
+    });
+  }
+  if (extraErrors.length > 0) {
+    report.match = false;
+    report.differences.push({
+      type: 'api_errors_extra',
+      message: `API errors in after but not before: ${extraErrors.join(', ')}`
+    });
+  }
+
+  // Compare mutation counts (POST/PUT/DELETE/PATCH)
+  const allMutationKeys = [...new Set([
+    ...Object.keys(sem1.mutationCounts),
+    ...Object.keys(sem2.mutationCounts)
+  ])].sort();
+
+  for (const key of allMutationKeys) {
+    const count1 = sem1.mutationCounts[key] || 0;
+    const count2 = sem2.mutationCounts[key] || 0;
+    if (count1 !== count2) {
+      report.match = false;
+      report.differences.push({
+        type: 'mutation_count',
+        message: `${key}: ${count1} → ${count2}`
+      });
+    }
   }
 
   // Compare form submits
@@ -404,29 +461,30 @@ function formatSemanticReport(report, options = {}) {
     }
   }
 
-  lines.push('');
-  lines.push('Before:');
-  lines.push(`  APIs: ${report.before.apis.join(', ')}`);
-  lines.push(`  Form submits: ${report.before.formSubmits.length} (${report.before.formSubmits.join(' → ')})`);
-  lines.push(`  Context menus: ${report.before.contextMenus.join(', ')}`);
-  if (showJourney && report.before.journey) {
-    lines.push('  Journey:');
-    for (const step of report.before.journey) {
-      lines.push(`    ${step}`);
+  function formatMutations(mutationCounts) {
+    const entries = Object.entries(mutationCounts).sort();
+    if (entries.length === 0) return '(none)';
+    return entries.map(([k, v]) => `${k} ×${v}`).join(', ');
+  }
+
+  function formatSemSummary(label, sem) {
+    lines.push('');
+    lines.push(`${label}:`);
+    lines.push(`  APIs: ${sem.apis.join(', ')}`);
+    lines.push(`  API errors: ${sem.apiErrors.length > 0 ? sem.apiErrors.join(', ') : '(none)'}`);
+    lines.push(`  Mutations: ${formatMutations(sem.mutationCounts)}`);
+    lines.push(`  Form submits: ${sem.formSubmits.length} (${sem.formSubmits.join(' → ')})`);
+    lines.push(`  Context menus: ${sem.contextMenus.join(', ')}`);
+    if (showJourney && sem.journey) {
+      lines.push('  Journey:');
+      for (const step of sem.journey) {
+        lines.push(`    ${step}`);
+      }
     }
   }
 
-  lines.push('');
-  lines.push('After:');
-  lines.push(`  APIs: ${report.after.apis.join(', ')}`);
-  lines.push(`  Form submits: ${report.after.formSubmits.length} (${report.after.formSubmits.join(' → ')})`);
-  lines.push(`  Context menus: ${report.after.contextMenus.join(', ')}`);
-  if (showJourney && report.after.journey) {
-    lines.push('  Journey:');
-    for (const step of report.after.journey) {
-      lines.push(`    ${step}`);
-    }
-  }
+  formatSemSummary('Before', report.before);
+  formatSemSummary('After', report.after);
 
   return lines.join('\n');
 }
