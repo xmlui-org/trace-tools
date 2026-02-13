@@ -197,8 +197,6 @@ Output:
 
 PASS — Journey completed successfully
 
-✓ Traces match semantically
-
 Before:
   APIs: GET /groups, GET /license, GET /settings, GET /status, GET /users, PUT /users/elvis
 
@@ -480,8 +478,6 @@ close
 
 VISIBLE ROWS: foo
 
-✓ Traces match semantically
-...
 SEMANTIC: PASS — Same APIs, forms, and navigation
 ═══════════════════════════════════════════════════════════════
 ```

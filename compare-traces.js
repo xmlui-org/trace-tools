@@ -390,9 +390,9 @@ function formatSemanticReport(report, options = {}) {
   }
 
   if (report.match) {
-    lines.push('✓ Traces match semantically');
+    lines.push('SEMANTIC_MATCH');
   } else {
-    lines.push('✗ Traces differ semantically');
+    lines.push('SEMANTIC_MISMATCH');
     lines.push('');
     lines.push('Differences:');
     for (const diff of report.differences) {
