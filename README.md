@@ -607,9 +607,9 @@ Journey: Create folder → copy file into it → delete folder → confirm "not 
 Key APIs: POST /CreateFile, POST /CopyFile, POST /DeleteFolder (417 + retry)
 ```
 
-The system can learn how to perform and capture them.
+The system can learn how to perform and capture them, as seen in this video.
 
-https://github.com/user-attachments/assets/d93b2f6f-d7d3-4b02-8c2c-62ef047be719
+[![Watch the video](https://github.com/user-attachments/assets/cddb7cda-1804-4516-9712-5c4509b128cd)](https://jonudell.info/video/learning-to-make-synthetic-journeys.mp4)
 
 ```
 ~/myWorkDrive-Client$ ./test.sh list
