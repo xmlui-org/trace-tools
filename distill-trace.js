@@ -1,5 +1,5 @@
 /**
- * Normalize parsed trace into essential user journey steps
+ * Distill parsed trace into essential user journey steps
  */
 
 const { parseTrace } = require('./parse-trace');
@@ -48,7 +48,7 @@ function resolveMethod(method, url) {
   return method;
 }
 
-function normalizeTrace(traces) {
+function distillTrace(traces) {
   const steps = [];
 
   // Sort traces by first event's perfTs to get chronological order
@@ -233,9 +233,9 @@ function extractAwaitConditions(trace) {
 }
 
 /**
- * Normalize raw JSON logs from window._xsLogs (captured by Playwright)
+ * Distill raw JSON logs from window._xsLogs (captured by Playwright)
  */
-function normalizeJsonLogs(logs) {
+function distillJsonLogs(logs) {
   // Group logs by traceId
   const traces = new Map();
 
@@ -255,7 +255,7 @@ function normalizeJsonLogs(logs) {
   const traceArray = Array.from(traces.values())
     .sort((a, b) => a.firstPerfTs - b.firstPerfTs);
 
-  // Convert each trace group to normalized step format
+  // Convert each trace group to distilled step format
   const steps = [];
 
   for (const trace of traceArray) {
@@ -425,7 +425,7 @@ function extractStepFromJsonLogs(trace) {
 
 // Export
 if (typeof module !== 'undefined') {
-  module.exports = { normalizeTrace, normalizeJsonLogs, parseTrace, resolveMethod };
+  module.exports = { distillTrace, distillJsonLogs, parseTrace, resolveMethod };
 }
 
 // CLI usage
@@ -434,17 +434,17 @@ if (require.main === module) {
   const input = fs.readFileSync(process.argv[2] || '/dev/stdin', 'utf8');
   const outputFile = process.argv[3];
 
-  let normalized;
+  let distilled;
   // Detect JSON vs text format
   if (input.trim().startsWith('[') || input.trim().startsWith('{')) {
     const logs = JSON.parse(input);
-    normalized = normalizeJsonLogs(logs);
+    distilled = distillJsonLogs(logs);
   } else {
     const parsed = parseTrace(input);
-    normalized = normalizeTrace(parsed);
+    distilled = distillTrace(parsed);
   }
 
-  const output = JSON.stringify(normalized, null, 2);
+  const output = JSON.stringify(distilled, null, 2);
   if (outputFile) {
     fs.writeFileSync(outputFile, output);
   } else {

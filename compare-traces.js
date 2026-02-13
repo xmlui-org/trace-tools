@@ -1,15 +1,15 @@
 /**
- * Compare two normalized traces and report differences
+ * Compare two distilled traces and report differences
  */
 
 const { parseTrace } = require('./parse-trace');
-const { normalizeTrace, normalizeJsonLogs, resolveMethod } = require('./normalize-trace');
+const { distillTrace, distillJsonLogs, resolveMethod } = require('./distill-trace');
 
 /**
- * Normalize input - handles text export, JSON logs array, or already-normalized object
+ * Distill input - handles text export, JSON logs array, or already-distilled object
  */
-function normalizeInput(input) {
-  // Already normalized
+function distillInput(input) {
+  // Already distilled
   if (input && typeof input === 'object' && input.steps) {
     return input;
   }
@@ -18,7 +18,7 @@ function normalizeInput(input) {
   if (typeof input === 'string' && input.trim().startsWith('[')) {
     try {
       const logs = JSON.parse(input);
-      return normalizeJsonLogs(logs);
+      return distillJsonLogs(logs);
     } catch (e) {
       // Fall through to text parsing
     }
@@ -26,20 +26,20 @@ function normalizeInput(input) {
 
   // JSON array (from Playwright capture)
   if (Array.isArray(input)) {
-    return normalizeJsonLogs(input);
+    return distillJsonLogs(input);
   }
 
   // Text export format
   if (typeof input === 'string') {
-    return normalizeTrace(parseTrace(input));
+    return distillTrace(parseTrace(input));
   }
 
   throw new Error('Unknown trace format');
 }
 
 function compareTraces(trace1, trace2) {
-  const norm1 = normalizeInput(trace1);
-  const norm2 = normalizeInput(trace2);
+  const norm1 = distillInput(trace1);
+  const norm2 = distillInput(trace2);
 
   const report = {
     match: true,
@@ -221,7 +221,7 @@ function formatReport(report) {
  * Extract semantic summary from trace for high-level comparison
  */
 function extractSemantics(input) {
-  // Get raw logs if we have normalized input
+  // Get raw logs if we have distilled input
   let logs;
   if (Array.isArray(input)) {
     logs = input;
@@ -268,8 +268,8 @@ function extractSemantics(input) {
     .filter(Boolean);
 
   // Extract journey steps (for --show-journey)
-  const normalized = normalizeJsonLogs(logs);
-  const journey = normalized.steps
+  const distilled = distillJsonLogs(logs);
+  const journey = distilled.steps
     .filter(s => s.action !== 'keydown')
     .map(s => {
       const target = s.target?.label || s.target?.testId || s.target?.component || '';

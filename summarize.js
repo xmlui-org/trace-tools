@@ -7,7 +7,7 @@
  */
 
 const fs = require('fs');
-const { normalizeJsonLogs } = require('./normalize-trace');
+const { distillJsonLogs } = require('./distill-trace');
 
 // Parse arguments
 let showJourney = false;
@@ -28,16 +28,16 @@ if (!inputFile) {
 
 try {
   const logs = JSON.parse(fs.readFileSync(inputFile, 'utf8'));
-  const normalized = normalizeJsonLogs(logs);
+  const distilled = distillJsonLogs(logs);
 
   console.log(`\n=== Trace Summary ===`);
   console.log(`Events: ${logs.length}`);
-  console.log(`Steps: ${normalized.steps.length}`);
+  console.log(`Steps: ${distilled.steps.length}`);
 
   if (showJourney) {
     console.log(`\nJourney:`);
 
-    for (const step of normalized.steps) {
+    for (const step of distilled.steps) {
       if (step.action === 'startup') {
         console.log(`  1. startup`);
         continue;

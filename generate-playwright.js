@@ -1,11 +1,11 @@
 /**
- * Generate Playwright test from normalized trace
+ * Generate Playwright test from distilled trace
  */
 
 const { parseTrace } = require('./parse-trace');
-const { normalizeTrace } = require('./normalize-trace');
+const { distillTrace } = require('./distill-trace');
 
-function generatePlaywright(normalized, options = {}) {
+function generatePlaywright(distilled, options = {}) {
   const { testName = 'user-journey', baseUrl = '/', captureTrace = true, useHashRouting = true, browserErrors = false } = options;
 
   const lines = [
@@ -16,8 +16,8 @@ function generatePlaywright(normalized, options = {}) {
   ];
 
   // Ensure startup step comes first
-  const startupStep = normalized.steps.find(s => s.action === 'startup');
-  const otherSteps = normalized.steps.filter(s => s.action !== 'startup');
+  const startupStep = distilled.steps.find(s => s.action === 'startup');
+  const otherSteps = distilled.steps.filter(s => s.action !== 'startup');
   const preOrdered = startupStep ? [startupStep, ...otherSteps] : otherSteps;
 
   // Reorder so form fill → submit are adjacent (modal interactions can
@@ -584,7 +584,7 @@ if (typeof module !== 'undefined') {
 if (require.main === module) {
   const fs = require('fs');
   const path = require('path');
-  const { normalizeJsonLogs } = require('./normalize-trace');
+  const { distillJsonLogs } = require('./distill-trace');
 
   const args = process.argv.slice(2);
   const browserErrors = args.includes('--browser-errors');
@@ -608,19 +608,19 @@ if (require.main === module) {
     } catch (e) { /* ignore parse errors */ }
   }
 
-  let normalized;
+  let distilled;
 
   // Detect JSON vs text format
   if (input.trim().startsWith('[') || input.trim().startsWith('{')) {
-    // JSON format - use normalizeJsonLogs
+    // JSON format - use distillJsonLogs
     const logs = JSON.parse(input);
-    normalized = normalizeJsonLogs(logs);
+    distilled = distillJsonLogs(logs);
   } else {
-    // Text format - use parseTrace + normalizeTrace
+    // Text format - use parseTrace + distillTrace
     const parsed = parseTrace(input);
-    normalized = normalizeTrace(parsed);
+    distilled = distillTrace(parsed);
   }
 
-  const playwright = generatePlaywright(normalized, { testName, useHashRouting, browserErrors });
+  const playwright = generatePlaywright(distilled, { testName, useHashRouting, browserErrors });
   console.log(playwright);
 }

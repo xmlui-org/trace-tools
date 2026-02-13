@@ -42,7 +42,7 @@ your-app/
 │       └── shares/Documents/       # Minimal files needed by baselines
 └── trace-tools/                    # Cloned dependency (gitignored)
     ├── generate-playwright.js      # Generates .spec.ts from a baseline trace
-    ├── normalize-trace.js          # Extracts steps from raw trace
+    ├── distill-trace.js          # Distills steps from raw trace
     ├── compare-traces.js           # Semantic comparison (APIs, forms, nav)
     ├── summarize.js                # Journey summary
     ├── auth-setup.ts               # Playwright auth (reads app-config.json)
@@ -313,7 +313,7 @@ The main command. Generates a Playwright test from a baseline, runs it, captures
 
 What happens under the hood:
 
-1. **Generate**: `generate-playwright.js` reads `traces/baselines/<journey>.json`, normalizes the raw trace into interaction steps using `normalize-trace.js`, and emits a `.spec.ts` file with Playwright selectors derived from ARIA roles and accessible names.
+1. **Generate**: `generate-playwright.js` reads `traces/baselines/<journey>.json`, distills the raw trace into interaction steps using `distill-trace.js`, and emits a `.spec.ts` file with Playwright selectors derived from ARIA roles and accessible names.
 2. **Run**: Playwright executes the generated test. For apps with auth, a headless setup project logs in first and saves browser state. The test replays each step (clicks, form fills, waits for API responses) and captures a new trace via the XMLUI inspector.
 3. **Capture**: The new trace is saved to `traces/captures/<journey>.json`.
 4. **Compare**: `compare-traces.js` compares the baseline and capture semantically — same API calls (method + endpoint), same form submissions, same navigation. It ignores timing, DOM details, and event ordering differences.
@@ -534,7 +534,7 @@ If the `.prev.json` reveals something interesting — an API call that only fire
 
 Auto-update required three fixes to make captures round-trip as baselines:
 
-1. **ARIA enrichment in `_xsLogs`** (`AppContent.tsx`). Promoted `ariaRole` and `ariaName` to top-level fields in interaction events so the normalizer extracts the same steps from captures as from inspector exports. For table rows, falls back to first `<td>` cell text since rows can be clicked anywhere.
+1. **ARIA enrichment in `_xsLogs`** (`AppContent.tsx`). Promoted `ariaRole` and `ariaName` to top-level fields in interaction events so the distiller extracts the same steps from captures as from inspector exports. For table rows, falls back to first `<td>` cell text since rows can be clicked anywhere.
 
 2. **Row locators using `.filter()`** (`generate-playwright.js`). A row's accessible name is all cells concatenated, so `exact: true` never matches and substring matching is ambiguous. Row selectors use `page.getByRole('row').filter({ has: page.getByRole('cell', { name, exact: true }) })` instead.
 
