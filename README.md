@@ -599,7 +599,7 @@ Key APIs: POST /CreateFile, POST /CopyFile, POST /DeleteFolder (417 + retry)
 
 The system can learn how to perform and capture them.
 
-https://media.githubusercontent.com/media/xmlui-org/trace-tools/main/learning-to-make-synthetic-journeys.mp4
+https://github.com/user-attachments/assets/d93b2f6f-d7d3-4b02-8c2c-62ef047be719
 
 ```
 ~/myWorkDrive-Client$ ./test.sh list
