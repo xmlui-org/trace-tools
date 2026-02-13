@@ -47,7 +47,8 @@ your-app/
     ├── compare-traces.js           # Semantic comparison (APIs, forms, nav)
     ├── summarize.js                # Journey summary
     ├── auth-setup.ts               # Playwright auth (reads app-config.json)
-    └── playwright.config.ts        # Playwright config (reads app-config.json)
+    ├── playwright.config.ts        # Playwright config (reads app-config.json)
+    └── xs-diff.html                # Canonical inspector viewer (copied to app)
 ```
 
 ### What's checked in vs transient
@@ -78,6 +79,25 @@ Make sure the app is running before running tests:
 
 - **Standalone apps**: start the app server (e.g. for core-ssh-server-ui, the app serves at `http://localhost:8123/ui/`)
 - **Dev-environment apps**: run `npm run dev` (serves at `http://localhost:5173` by default)
+
+## Inspector viewer (xs-diff.html)
+
+The XMLUI inspector viewer is a standalone HTML file (`xs-diff.html`) that displays the trace inspector UI in an iframe. It reads `window.parent._xsSourceFiles` and `window.parent._xsLogs` from the host app to show source files, interaction traces, and ARIA metadata.
+
+The canonical copy lives in trace-tools. Each app copies it to its `public/` directory so the dev server serves it:
+
+```bash
+cp trace-tools/xs-diff.html public/xs-diff.html
+```
+
+When trace-tools updates xs-diff.html (e.g. new inspector features), downstream apps pull the update:
+
+```bash
+cd trace-tools && git pull && cd ..
+cp trace-tools/xs-diff.html public/xs-diff.html
+```
+
+The app's `public/xs-diff.html` is checked in — it's part of the app's served assets. But trace-tools is the single source of truth.
 
 ## Capturing a trace
 
