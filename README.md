@@ -91,6 +91,7 @@ Open the XMLUI inspector in the running app and perform the user journey you wan
 
 - **Start from the app's root URL.** The generated test always begins at the app's root (e.g. `http://localhost:8123/ui/`). If your journey happens on a subpage like `/users`, include the navigation click (e.g. clicking "USERS" in the sidebar) as part of the trace. If you navigate to the subpage first and then start capturing, the test won't know how to get there.
 - **Design roundtrip journeys.** A trace that creates a user should also delete it, so the system ends in the same state it started. Enable/disable is naturally a roundtrip. Create/delete should be captured as one journey: create a test user, then delete it. This ensures the test is repeatable — running it twice produces the same result.
+- **Don't worry about being clean.** Extra clicks, hesitations, and accidental interactions are fine. The initial capture just needs to be functionally correct — hitting the right APIs, submitting the right forms, navigating the right pages. On the first passing replay, auto-update replaces the messy human capture with a clean Playwright capture (see [Opt-in chaos](#opt-in-chaos)).
 - **Startup noise doesn't matter.** The trace will include initial data fetches and page render events from app startup. The normalizer ignores these and only extracts interaction steps (clicks, form submits, API calls triggered by user actions). You can use the inspector's Clear button before starting your journey if you like, but it's not necessary.
 - **One journey per trace.** Keep each trace focused on a single user journey. This makes baselines easy to name, understand, and debug when a test fails.
 
@@ -509,7 +510,7 @@ Most browser errors (400/404 from existence checks, React DOM nesting warnings) 
 
 The first baseline for any journey is a raw human capture — it contains the messiness of real interaction: extra clicks, hesitations, stop-and-start behavior, background events from a page that was already loaded. This messiness is valuable. It's the kind of input a real user produces, and it may exercise code paths that a clean Playwright replay wouldn't.
 
-On the first passing replay, auto-update replaces that raw artifact with a clean Playwright capture — deterministic, minimal, no human noise. Every subsequent pass refines it further. The baseline converges toward the cleanest possible trace of that journey.
+On the first passing replay, auto-update replaces that raw artifact with a clean Playwright capture — deterministic, minimal, no human noise. This converges in one step: the first clean replay is already the stable baseline. Subsequent passes produce essentially identical captures.
 
 But you don't lose the chaos. The `.prev.json` file preserves the prior version. For the very first auto-update, that's the original human capture. You can always compare:
 
