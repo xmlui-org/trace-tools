@@ -554,7 +554,15 @@ node trace-tools/compare-traces.js --semantic traces/baselines/rename-file-round
 
 ### Opt-in chaos
 
-If the `.prev.json` reveals something interesting — an API call that only fires during slow human interaction, a modal that only appears when you pause between steps — that's a signal worth investigating. The chaos found it; the clean baseline wouldn't have.
+Baselines can come from two sources: clean Playwright captures (synthetic) or messy human captures (chaotic). By default we use synthetic baselines for convenience — they're deterministic and easy to generate. But human captures introduce real-world noise: hesitations, extra clicks, stop-and-start behavior, background events that fire during pauses. This chaos is sometimes good — it exercises code paths that clean replays never hit — and sometimes bad — there's nothing to learn from a stray click.
+
+To switch from synthetic to chaotic, capture a baseline manually in the inspector and save it:
+
+```bash
+./test.sh save ~/Downloads/rename-file-roundtrip.json rename-file-roundtrip
+```
+
+On the first passing replay, auto-update replaces the chaotic baseline with a clean one, but the `.prev.json` preserves the original. If it reveals something interesting — an API call that only fires during slow human interaction, a modal that only appears when you pause between steps — that's a signal worth investigating. The chaos found it; the clean baseline wouldn't have.
 
 ### Implementation notes
 
