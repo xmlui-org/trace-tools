@@ -6,7 +6,7 @@ const { parseTrace } = require('./parse-trace');
 const { normalizeTrace } = require('./normalize-trace');
 
 function generatePlaywright(normalized, options = {}) {
-  const { testName = 'user-journey', baseUrl = '/', captureTrace = true, useHashRouting = true } = options;
+  const { testName = 'user-journey', baseUrl = '/', captureTrace = true, useHashRouting = true, browserErrors = false } = options;
 
   const lines = [
     `import { test, expect } from '@playwright/test';`,
@@ -34,9 +34,46 @@ function generatePlaywright(normalized, options = {}) {
   const firstInteraction = otherSteps[0];
   const startingPage = firstInteraction?.await?.navigate?.from;
 
-  for (const step of orderedSteps) {
+  for (let si = 0; si < orderedSteps.length; si++) {
+    const step = orderedSteps[si];
     lines.push('');
     lines.push(...generateStepCode(step, fillPlan));
+
+    // After a step that awaits a mutating API response (POST/PUT/DELETE),
+    // the DOM may not have re-rendered yet. Peek at the next step's target
+    // and emit a waitFor() so the selector doesn't race against React.
+    if (step.await?.api?.length > 0 && step.action !== 'startup') {
+      const hasMutation = step.await.api.some(a =>
+        a.method === 'POST' || a.method === 'PUT' || a.method === 'DELETE'
+      );
+      if (hasMutation && si + 1 < orderedSteps.length) {
+        const next = orderedSteps[si + 1];
+        const nt = next?.target;
+        if (nt?.ariaRole && nt?.ariaName) {
+          const exact = nt.ariaRole === 'row' ? '' : ', exact: true';
+          lines.push(`  await page.getByRole('${nt.ariaRole}', { name: '${nt.ariaName}'${exact} }).waitFor();`);
+        } else if (nt?.label) {
+          lines.push(`  await page.getByText('${nt.label}', { exact: true }).waitFor();`);
+        }
+      }
+    }
+
+    // After startup, install a modal observer to detect unexpected dialogs
+    if (step.action === 'startup') {
+      lines.push('');
+      lines.push(`  // Monitor for modal dialogs (Conflict, error, etc.)`);
+      lines.push(`  await page.evaluate(() => {`);
+      lines.push(`    new MutationObserver(() => {`);
+      lines.push(`      document.querySelectorAll('[role="dialog"]').forEach(d => {`);
+      lines.push(`        if (d.getAttribute('data-modal-seen')) return;`);
+      lines.push(`        d.setAttribute('data-modal-seen', '1');`);
+      lines.push(`        const title = (d.querySelector('h2, h3, [class*="title"]') as HTMLElement)?.innerText || '';`);
+      lines.push(`        const body = (d as HTMLElement).innerText?.slice(0, 300) || '';`);
+      lines.push(`        console.log('__MODAL__:' + title + ' | ' + body);`);
+      lines.push(`      });`);
+      lines.push(`    }).observe(document.body, { childList: true, subtree: true });`);
+      lines.push(`  });`);
+    }
 
     // After startup, navigate to the starting page if it's not the root.
     // XMLUI apps use client-side routing, so page.goto() won't work —
@@ -70,8 +107,10 @@ function generatePlaywright(normalized, options = {}) {
     lines.splice(testStart + 1, 0, `
   // Collect XMLUI runtime errors (ErrorBoundary, script errors, toast messages)
   const _xsErrors: string[] = [];
+  const _modalsSeen: string[] = [];
   page.on('console', msg => {
     if (msg.type() === 'error') _xsErrors.push(msg.text());
+    if (msg.text().startsWith('__MODAL__:')) _modalsSeen.push(msg.text().slice(10));
   });
   page.on('pageerror', err => _xsErrors.push(err.message));
 
@@ -95,8 +134,24 @@ function generatePlaywright(normalized, options = {}) {
     } catch (e) {
       console.log('Could not capture trace (browser may have closed)');
     }
-    // Report console errors collected during the test
-    if (_xsErrors.length > 0) {
+    // Report modals that appeared during the test
+    if (_modalsSeen.length > 0) {
+      console.log('\\nMODALS:');
+      _modalsSeen.forEach(m => console.log(\`  \${m}\`));
+    }
+    // Report visible table rows for diagnostics
+    try {
+      const rows = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('table tbody tr'))
+          .map(r => (r as HTMLElement).innerText?.split('\\t')[0]?.trim())
+          .filter(Boolean)
+      );
+      if (rows.length > 0) {
+        console.log('\\nVISIBLE ROWS: ' + rows.join(', '));
+      }
+    } catch (_) {}
+    // Report console errors collected during the test (opt-in via --browser-errors)
+    if (${browserErrors} && _xsErrors.length > 0) {
       console.log('\\nBROWSER ERRORS:');
       _xsErrors.forEach(e => console.log(\`  \${e}\`));
     }
@@ -501,8 +556,11 @@ if (require.main === module) {
   const path = require('path');
   const { normalizeJsonLogs } = require('./normalize-trace');
 
-  const inputFile = process.argv[2] || '/dev/stdin';
-  const testName = process.argv[3] || 'user-journey';
+  const args = process.argv.slice(2);
+  const browserErrors = args.includes('--browser-errors');
+  const positional = args.filter(a => !a.startsWith('--'));
+  const inputFile = positional[0] || '/dev/stdin';
+  const testName = positional[1] || 'user-journey';
   const input = fs.readFileSync(inputFile, 'utf8');
 
   // Detect routing mode from the app's config.json (check parent dir first)
@@ -533,6 +591,6 @@ if (require.main === module) {
     normalized = normalizeTrace(parsed);
   }
 
-  const playwright = generatePlaywright(normalized, { testName, useHashRouting });
+  const playwright = generatePlaywright(normalized, { testName, useHashRouting, browserErrors });
   console.log(playwright);
 }

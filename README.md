@@ -37,8 +37,10 @@ your-app/
 │   ├── baselines/                  # Reference traces (checked in)
 │   │   ├── enable-disable-user.json
 │   │   └── ignore-apis.txt         # APIs to exclude from semantic comparison
-│   └── captures/                   # Output from test runs (gitignored)
-│       └── enable-disable-user.json
+│   ├── captures/                   # Output from test runs (gitignored)
+│   │   └── enable-disable-user.json
+│   └── fixtures/                   # Server filesystem state (checked in)
+│       └── shares/Documents/       # Minimal files needed by baselines
 └── trace-tools/                    # Cloned dependency (gitignored)
     ├── generate-playwright.js      # Generates .spec.ts from a baseline trace
     ├── normalize-trace.js          # Extracts steps from raw trace
@@ -57,6 +59,7 @@ your-app/
 | `traces/baselines/*.json` | Yes | Reference traces — the "known good" behavior |
 | `traces/baselines/ignore-apis.txt` | Yes (if needed) | APIs to exclude from semantic comparison |
 | `traces/captures/*.json` | No | Output from test runs, compared against baselines |
+| `traces/fixtures/` | Yes | Server filesystem state needed by baselines |
 | `trace-tools/` | No | Cloned from github.com/xmlui-org/trace-tools |
 
 Generated test files and captured traces inside `trace-tools/` are transient — created during a run and cleaned up afterward.
@@ -90,6 +93,34 @@ Open the XMLUI inspector in the running app and perform the user journey you wan
 - **Design roundtrip journeys.** A trace that creates a user should also delete it, so the system ends in the same state it started. Enable/disable is naturally a roundtrip. Create/delete should be captured as one journey: create a test user, then delete it. This ensures the test is repeatable — running it twice produces the same result.
 - **Startup noise doesn't matter.** The trace will include initial data fetches and page render events from app startup. The normalizer ignores these and only extracts interaction steps (clicks, form submits, API calls triggered by user actions). You can use the inspector's Clear button before starting your journey if you like, but it's not necessary.
 - **One journey per trace.** Keep each trace focused on a single user journey. This makes baselines easy to name, understand, and debug when a test fails.
+
+## Fixtures: deterministic server state
+
+Tests replay user journeys against a live app. If the app reads from a filesystem (e.g. a file manager backed by `~/mwd/shares/Documents/`), the tests depend on specific files and folders being present. A copy-paste test that starts by right-clicking `test.xlsx` will fail if `test.xlsx` doesn't exist.
+
+The `traces/fixtures/` directory stores the minimal filesystem state needed by all baselines. It's checked into the repo so any developer can set up the right state:
+
+```bash
+# Reset server filesystem to the fixture state
+rm -rf ~/mwd/shares/Documents
+cp -r traces/fixtures/shares/Documents ~/mwd/shares/Documents
+```
+
+For myWorkDrive-Client, the fixture contains:
+
+```
+traces/fixtures/shares/Documents/
+  test.xlsx                          # Used by copy-paste and cut-paste tests
+  xs-diff-20260127T035521.html       # Used by rename test
+  foo/                               # Target folder for paste operations
+    .gitkeep
+```
+
+### Why roundtrips matter for fixtures
+
+Tests should be roundtrips: copy a file then delete the copy, move a file then move it back, create a folder then delete it. This ensures the server state is the same after the test as before. Without roundtrips, each run leaves behind artifacts (copied files, renamed files, extra folders) that cause conflicts on the next run — the app may show "File already exists" modals that block the test.
+
+If a test flakes and the cleanup step doesn't fire (e.g. the delete after a copy), reset the fixture state before the next run.
 
 ## Walkthrough: capturing and testing user journeys
 
@@ -409,30 +440,47 @@ node compare-traces.js --semantic --ignore-api /license before.json after.json
 
 ## Reading the test output
 
-A test run produces three kinds of results, each telling you something different:
+A test run produces several kinds of results:
 
 ```
 ═══════════════════════════════════════════════════════════════
-                    REGRESSION TEST: create-delete-user
+                    REGRESSION TEST: create-delete-folder-roundtrip
 ═══════════════════════════════════════════════════════════════
 
 PASS — Journey completed successfully
 
-BROWSER ERRORS:
-  Failed to load resource: the server responded with a status of 400 (Bad Request)
+MODALS:
+  Create new folder | Create new folder
+Add a folder to organize your files.
+Name*
+Cancel
+Create
+close
+  Are you sure you want to delete folder "test"? | ...
 
-(ignoring APIs: /license)
+VISIBLE ROWS: foo
+
 ✓ Traces match semantically
 ...
 SEMANTIC: PASS — Same APIs, forms, and navigation
 ═══════════════════════════════════════════════════════════════
 ```
 
-**PASS / FAIL** — Did the generated Playwright test complete? This runs every step in the journey: clicks, form fills, waits for API responses. PASS means all Playwright locators resolved and all actions completed. FAIL means a selector timed out — usually because a UI element lacks proper ARIA semantics (role or accessible name), so the generated `getByRole(...)` call can't find it.
+**PASS / FAIL** — Did the generated Playwright test complete? PASS means all Playwright locators resolved and all actions completed. FAIL means a selector timed out — usually because a required element is missing (wrong server state) or hasn't rendered yet (race condition).
 
-**SEMANTIC: PASS / FAIL** — Did the app make the same API calls? This compares the API endpoints, form submissions, and navigations between the baseline trace (captured in the inspector) and the new trace (captured by Playwright). PASS means the app's behavior is unchanged. FAIL means an API call appeared or disappeared — check whether it's a real regression or a timing artifact. If it's a timing artifact (like a polling endpoint), add it to `ignore-apis.txt`.
+**MODALS** — Every modal dialog that appeared during the test, with its title and content. This is always shown, and is essential for diagnosing failures — if the test times out waiting for a selector, the MODALS section often reveals what went wrong (e.g. a "Conflict: File already exists" dialog blocking the UI).
 
-**BROWSER ERRORS** — Console errors from the browser during the test. 400 and 404 responses from existence-check APIs (e.g. `GET /users/test` returning 400 when the user doesn't exist yet) are expected and not failures. These reflect normal app logic — the app checks whether a resource exists before creating it.
+**VISIBLE ROWS** — Table rows visible at the end of the test. Helps diagnose selector failures when a test expects a file or folder that isn't present.
+
+**SEMANTIC: PASS / FAIL** — Did the app make the same API calls? This compares the API endpoints, form submissions, and navigations between the baseline trace and the new trace. PASS means the app's behavior is unchanged. FAIL means an API call appeared or disappeared — check whether it's a real regression or a timing artifact.
+
+**BROWSER ERRORS** — Console errors from the browser during the test. Opt-in via `--browser-errors`:
+
+```bash
+./test.sh run create-delete-folder-roundtrip --browser-errors
+```
+
+Most browser errors (400/404 from existence checks, React DOM nesting warnings) are noise, so this is off by default.
 
 ## Known limitations
 
@@ -441,3 +489,55 @@ SEMANTIC: PASS — Same APIs, forms, and navigation
 ## TBD
 
 - **Resilience to XMLUI core rendering changes.** The test generator produces Playwright selectors from ARIA roles and accessible names captured in the trace. These depend on how the XMLUI framework renders components to the DOM — what HTML elements are used, how labels are associated with inputs, which elements get implicit ARIA roles. When the framework's rendering changes (e.g. a form input component switches from `<div>` wrappers to native `<fieldset>`, or label association moves from `htmlFor` to `aria-labelledby`), the captured trace metadata may change, breaking previously working selectors. How should trace-tools handle this? Options include: pinning traces to a framework version, detecting selector failures and falling back to alternative strategies, or decoupling the semantic comparison (which is framework-agnostic) from the Playwright test generation (which is framework-sensitive).
+
+## Appendix: Experiment — auto-update baselines on pass
+
+**Status:** Experimental. Trying this to see if it improves the workflow.
+
+**Hypothesis:** After a test run where the semantic comparison passes, the capture should automatically replace the baseline. This keeps baselines fresh — always reflecting the current app's actual trace output — without manual intervention.
+
+**Rationale:** The semantic comparison (API calls, form submissions, navigation) is what detects regressions. The raw trace events (event counts, timing, rendering details) vary slightly between runs even when behavior is identical. If baselines aren't updated, they drift from what the app actually produces, and the raw event counts diverge over time. Auto-updating on pass means:
+
+- Baselines always reflect current app behavior
+- `git diff` on baselines shows exactly when real behavior changed
+- No manual `./test.sh update` step to forget
+- The manual `update` command still exists for accepting intentional behavior changes after a semantic FAIL
+
+**Prior baselines:** Each auto-update saves the previous baseline as `<journey>.prev.json`. This gives you one level of history beyond git.
+
+### Opt-in chaos
+
+The first baseline for any journey is a raw human capture — it contains the messiness of real interaction: extra clicks, hesitations, stop-and-start behavior, background events from a page that was already loaded. This messiness is valuable. It's the kind of input a real user produces, and it may exercise code paths that a clean Playwright replay wouldn't.
+
+On the first passing replay, auto-update replaces that raw artifact with a clean Playwright capture — deterministic, minimal, no human noise. Every subsequent pass refines it further. The baseline converges toward the cleanest possible trace of that journey.
+
+But you don't lose the chaos. The `.prev.json` file preserves the prior version. For the very first auto-update, that's the original human capture. You can always compare:
+
+```bash
+# What changed between the human capture and the clean replay?
+node trace-tools/compare-traces.js --semantic traces/baselines/rename-file-roundtrip.prev.json traces/baselines/rename-file-roundtrip.json
+```
+
+This gives you the best of both worlds:
+- **Refined baselines** that are deterministic and stable for regression testing
+- **Prior captures** that preserve the human-induced messiness for debugging and discovery
+- **Git history** that shows the full evolution from raw capture to refined baseline
+
+If the `.prev.json` reveals something interesting — an API call that only fires during slow human interaction, a modal that only appears when you pause between steps — that's a signal worth investigating. The chaos found it; the clean baseline wouldn't have.
+
+**What to watch for:**
+
+- Does auto-update cause any problems with git noise (frequent baseline churn)?
+- Do the semantic diffs remain stable, or does auto-updating mask gradual drift?
+- Is there ever a case where you want the baseline to NOT update after a semantic pass?
+- Do `.prev.json` comparisons surface interesting differences?
+
+### First result: blocked on capture format
+
+Auto-update was implemented and immediately tested. The first passing run replaced the baseline (134 lines, inspector export) with the Playwright capture (4330 lines, `_xsLogs`). The next run failed — the test generated from the capture couldn't find its selectors.
+
+The root cause: `_xsLogs` and inspector exports normalize differently. The inspector export captures ARIA metadata (ariaName, ariaRole) on interaction events, producing specific selectors like `contextmenu: xs-diff-20260127T035521.html`. The `_xsLogs` capture lacks this metadata, producing generic selectors like `contextmenu: Table`. The normalizer extracts 9 steps with textbox interactions from the baseline but only 7 steps (no textbox, no file names) from the capture.
+
+**Auto-update is disabled** until `_xsLogs` captures the same ARIA metadata as inspector exports. The `.prev.json` mechanism and the opt-in chaos concept are ready to go — they just need the capture format to match.
+
+**Unblocking step:** Enrich `_xsLogs` events with `ariaRole` and `ariaName` from the DOM element that triggered the event. Once the normalizer produces identical steps from both formats, auto-update can be enabled.
