@@ -563,3 +563,54 @@ Auto-update required three fixes to make captures round-trip as baselines:
 2. **Row locators using `.filter()`** (`generate-playwright.js`). A row's accessible name is all cells concatenated, so `exact: true` never matches and substring matching is ambiguous. Row selectors use `page.getByRole('row').filter({ has: page.getByRole('cell', { name, exact: true }) })` instead.
 
 3. **FormData fill fallback** (`generate-playwright.js`). Playwright's `.fill()` doesn't fire `keydown` events in `_xsLogs`, so captures lack textbox interactions. On submit, any formData fields not covered by textbox interactions get `fill()` calls generated from the field values.
+
+## Synthetic baselines
+
+Suppose you have this.
+
+```
+~/myWorkDrive-Client$ ./test.sh list
+Available baselines:
+  copy-paste-delete-roundtrip (167 events)
+  create-delete-folder-roundtrip (150 events)
+  cut-paste-file-roundtrip (188 events)
+  delete-nonempty-folder (200 events)
+```
+
+You want to add these.
+
+```
+Name: folder-tree-navigate
+Journey: Expand tree node → click subfolder → verify file list updates → click parent → back to start
+Key APIs: GET /ListFolder (multiple)
+────────────────────────────────────────
+Name: breadcrumb-navigate
+Journey: Double-click into subfolder → double-click deeper → click breadcrumb link back to root
+Key APIs: GET /ListFolder (multiple)
+────────────────────────────────────────
+Name: paste-conflict-replace
+Journey: Copy file → paste in same parent via tree → 409 → "Replace"
+Key APIs: POST /CopyFile (409 + retry)
+────────────────────────────────────────
+Name: delete-nonempty-folder
+Journey: Create folder → copy file into it → delete folder → confirm "not empty" recursive
+Key APIs: POST /CreateFile, POST /CopyFile, POST /DeleteFolder (417 + retry)
+```
+
+The system can learn how to perform and capture them.
+
+https://github.com/user-attachments/assets/d93b2f6f-d7d3-4b02-8c2c-62ef047be719
+
+```
+~/myWorkDrive-Client$ ./test.sh list
+Available baselines:
+  breadcrumb-navigate (72 events)
+  copy-paste-delete-roundtrip (167 events)
+  create-delete-folder-roundtrip (150 events)
+  cut-paste-file-roundtrip (188 events)
+  delete-nonempty-folder (200 events)
+  folder-tree-navigate (59 events)
+  paste-conflict-keep-both (200 events)
+  paste-conflict-replace (200 events)
+  rename-file-roundtrip (143 events)
+```
