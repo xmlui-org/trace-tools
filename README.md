@@ -511,64 +511,36 @@ Most browser errors (400/404 from existence checks, React DOM nesting warnings) 
 
 - **Resilience to XMLUI core rendering changes.** The test generator produces Playwright selectors from ARIA roles and accessible names captured in the trace. These depend on how the XMLUI framework renders components to the DOM — what HTML elements are used, how labels are associated with inputs, which elements get implicit ARIA roles. When the framework's rendering changes (e.g. a form input component switches from `<div>` wrappers to native `<fieldset>`, or label association moves from `htmlFor` to `aria-labelledby`), the captured trace metadata may change, breaking previously working selectors. How should trace-tools handle this? Options include: pinning traces to a framework version, detecting selector failures and falling back to alternative strategies, or decoupling the semantic comparison (which is framework-agnostic) from the Playwright test generation (which is framework-sensitive).
 
-## Appendix: Experiment — auto-update baselines on pass
+## Auto-update baselines on pass
 
-**Status:** Working. Auto-update round-trips successfully across all 4 baselines.
+When the semantic comparison passes, the capture automatically replaces the baseline. The previous baseline is saved as `<journey>.prev.json`.
 
-**Hypothesis:** After a test run where the semantic comparison passes, the capture should automatically replace the baseline. This keeps baselines fresh — always reflecting the current app's actual trace output — without manual intervention.
-
-**Rationale:** The semantic comparison (API calls, form submissions, navigation) is what detects regressions. The raw trace events (event counts, timing, rendering details) vary slightly between runs even when behavior is identical. If baselines aren't updated, they drift from what the app actually produces, and the raw event counts diverge over time. Auto-updating on pass means:
+The semantic comparison (API calls, form submissions, navigation) is what detects regressions. The raw trace events (event counts, timing, rendering details) vary between runs even when behavior is identical. Auto-updating on pass means:
 
 - Baselines always reflect current app behavior
 - `git diff` on baselines shows exactly when real behavior changed
 - No manual `./test.sh update` step to forget
 - The manual `update` command still exists for accepting intentional behavior changes after a semantic FAIL
 
-**Prior baselines:** Each auto-update saves the previous baseline as `<journey>.prev.json`. This gives you one level of history beyond git.
+### How it works
 
-### Opt-in chaos
+The first baseline for any journey is a raw human capture — extra clicks, hesitations, stop-and-start behavior, background events. On the first passing replay, auto-update replaces it with a clean Playwright capture — deterministic, minimal, no human noise. This converges in one step: the first clean replay is already the stable baseline. Subsequent passes produce essentially identical captures.
 
-The first baseline for any journey is a raw human capture — it contains the messiness of real interaction: extra clicks, hesitations, stop-and-start behavior, background events from a page that was already loaded. This messiness is valuable. It's the kind of input a real user produces, and it may exercise code paths that a clean Playwright replay wouldn't.
-
-On the first passing replay, auto-update replaces that raw artifact with a clean Playwright capture — deterministic, minimal, no human noise. This converges in one step: the first clean replay is already the stable baseline. Subsequent passes produce essentially identical captures.
-
-But you don't lose the chaos. The `.prev.json` file preserves the prior version. For the very first auto-update, that's the original human capture. You can always compare:
+The `.prev.json` preserves the prior version. For the first auto-update, that's the original human capture:
 
 ```bash
 # What changed between the human capture and the clean replay?
 node trace-tools/compare-traces.js --semantic traces/baselines/rename-file-roundtrip.prev.json traces/baselines/rename-file-roundtrip.json
 ```
 
-This gives you the best of both worlds:
-- **Refined baselines** that are deterministic and stable for regression testing
-- **Prior captures** that preserve the human-induced messiness for debugging and discovery
-- **Git history** that shows the full evolution from raw capture to refined baseline
-
 If the `.prev.json` reveals something interesting — an API call that only fires during slow human interaction, a modal that only appears when you pause between steps — that's a signal worth investigating. The chaos found it; the clean baseline wouldn't have.
 
-**What to watch for:**
+### Implementation notes
 
-- Does auto-update cause any problems with git noise (frequent baseline churn)?
-- Do the semantic diffs remain stable, or does auto-updating mask gradual drift?
-- Is there ever a case where you want the baseline to NOT update after a semantic pass?
-- Do `.prev.json` comparisons surface interesting differences?
+Auto-update required three fixes to make captures round-trip as baselines:
 
-### First result: blocked, then unblocked
+1. **ARIA enrichment in `_xsLogs`** (`AppContent.tsx`). Promoted `ariaRole` and `ariaName` to top-level fields in interaction events so the normalizer extracts the same steps from captures as from inspector exports. For table rows, falls back to first `<td>` cell text since rows can be clicked anywhere.
 
-Auto-update was implemented and immediately tested. The first passing run replaced the baseline (134 lines, inspector export) with the Playwright capture (4330 lines, `_xsLogs`). The next run failed — the test generated from the capture couldn't find its selectors.
+2. **Row locators using `.filter()`** (`generate-playwright.js`). A row's accessible name is all cells concatenated, so `exact: true` never matches and substring matching is ambiguous. Row selectors use `page.getByRole('row').filter({ has: page.getByRole('cell', { name, exact: true }) })` instead.
 
-The root cause: `_xsLogs` and inspector exports normalize differently. The inspector export captures ARIA metadata (ariaName, ariaRole) on interaction events, producing specific selectors like `contextmenu: xs-diff-20260127T035521.html`. The `_xsLogs` capture lacked this metadata, producing generic selectors like `contextmenu: Table`.
-
-**Fix 1: ARIA enrichment in `_xsLogs`.** Added `ariaRole` and `ariaName` as top-level fields in the `_xsLogs.push()` call in `AppContent.tsx`. These were already computed in the `detail` object but not promoted to the top level where the normalizer expects them. For table rows, the `ariaName` falls back to the first `<td>` cell text (the filename column) since rows can be clicked anywhere and `target.textContent` may be a size or date.
-
-**Fix 2: Row locators using `.filter()`.** A table row's accessible name in the DOM is the concatenation of ALL cells (e.g. "foo 0 KiB 2024-01-01"). This means `getByRole('row', { name: 'foo', exact: true })` never matches (too strict) and `getByRole('row', { name: 'foo' })` can be ambiguous — `name: 'test'` matches both a "test" folder and "test.xlsx". The fix: use cell-level filtering:
-
-```javascript
-page.getByRole('row').filter({ has: page.getByRole('cell', { name: 'foo', exact: true }) })
-```
-
-A cell's accessible name IS just its text, so exact matching works correctly and disambiguates "test" from "test.xlsx".
-
-**Fix 3: FormData fill fallback.** Playwright's `.fill()` doesn't fire `keydown` events in `_xsLogs`, so captures from auto-updated baselines had no textbox interactions for the fill plan. Added a fallback: when generating a submit button click, emit `fill()` calls for any formData fields not covered by textbox interactions.
-
-**Result:** Auto-update round-trip verified — 3 consecutive `run-all` passes (4/4 each), where Pass 1 auto-updates from original baselines and Pass 2+ confirms the auto-updated baselines generate working tests.
+3. **FormData fill fallback** (`generate-playwright.js`). Playwright's `.fill()` doesn't fire `keydown` events in `_xsLogs`, so captures lack textbox interactions. On submit, any formData fields not covered by textbox interactions get `fill()` calls generated from the field values.
