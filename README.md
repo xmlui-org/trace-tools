@@ -22,10 +22,9 @@ The two app types differ in how they're served, whether they require auth, and h
 |---|---|---|
 | How it runs | Static files served by an external process | `npm run dev` (Vite dev server) |
 | Base URL | `http://localhost:8123/ui/` (path prefix) | `http://localhost:5173` (root) |
-| Auth required | Yes — `app-config.json` describes the login flow | No — no `app-config.json` needed |
 | XMLUI runtime | Checked-in JS bundle (`xmlui/0.12.0.js`) | Installed via npm, built by Vite |
 
-For standalone apps, `app-config.json` provides both the base URL and auth configuration. For dev-environment apps, trace-tools defaults to `http://localhost:5173` and skips auth entirely.
+Either type may require auth. If it does, `app-config.json` describes the login flow (see [Auth configuration](#auth-configuration)). If not, omit the file. Auth is independent of how the app is served.
 
 ## Directory layout
 
