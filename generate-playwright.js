@@ -50,8 +50,11 @@ function generatePlaywright(normalized, options = {}) {
         const next = orderedSteps[si + 1];
         const nt = next?.target;
         if (nt?.ariaRole && nt?.ariaName) {
-          const exact = nt.ariaRole === 'row' ? '' : ', exact: true';
-          lines.push(`  await page.getByRole('${nt.ariaRole}', { name: '${nt.ariaName}'${exact} }).waitFor();`);
+          if (nt.ariaRole === 'row') {
+            lines.push(`  await ${rowLocator(nt.ariaName)}.waitFor();`);
+          } else {
+            lines.push(`  await page.getByRole('${nt.ariaRole}', { name: '${nt.ariaName}', exact: true }).waitFor();`);
+          }
         } else if (nt?.label) {
           lines.push(`  await page.getByText('${nt.label}', { exact: true }).waitFor();`);
         }
@@ -352,6 +355,16 @@ function fieldMatchScore(fieldName, ariaName) {
   return matchedLength;
 }
 
+/**
+ * Build a Playwright locator string for a table row by its first-cell text.
+ * A row's accessible name is ALL cells concatenated, so getByRole('row', { name, exact })
+ * either over-matches (substring) or fails (exact). Instead, filter by the cell content.
+ */
+function rowLocator(ariaName) {
+  const escaped = ariaName.replace(/'/g, "\\'");
+  return `page.getByRole('row').filter({ has: page.getByRole('cell', { name: '${escaped}', exact: true }) })`;
+}
+
 function generateStepCode(step, fillPlan) {
   const lines = [];
   const indent = '  ';
@@ -442,25 +455,39 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
     return lines;
   }
 
-  // Form submit button: only fill fields the user actually interacted with
-  // (handled above via fillPlan). Fields the user didn't touch have defaults
-  // and should not be filled — their field names often don't match UI labels.
+  // Form submit button: fill any formData fields not already covered by textbox
+  // interactions (e.g. when the trace comes from a Playwright capture that uses
+  // .fill() instead of keydown events).
+  if (formData && typeof formData === 'object') {
+    const stringFields = Object.entries(formData).filter(([, v]) => typeof v === 'string');
+    for (const [fieldName, value] of stringFields) {
+      if (!fillPlan.coveredFields?.has(fieldName)) {
+        // Use fieldName as textbox label (capitalize first letter for common patterns)
+        const textboxName = fieldName.charAt(0).toUpperCase() + fieldName.slice(1).replace(/([A-Z])/g, ' $1').trim();
+        lines.push(`${indent}await page.getByRole('textbox', { name: '${textboxName}' }).fill('${String(value).replace(/'/g, "\\'")}');`);
+      }
+    }
+  }
 
   // Checkbox in a table row: hover the row first to make the checkbox visible
   // (XMLUI tables hide selection checkboxes until row hover)
   if (ariaRole === 'checkbox' && ariaName?.startsWith('Select ')) {
     const rowName = ariaName.replace('Select ', '');
-    lines.push(`${indent}await page.getByRole('row', { name: '${rowName}' }).hover();`);
+    lines.push(`${indent}await ${rowLocator(rowName)}.hover();`);
     lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}', exact: true }).${method}();`);
     return lines;
   }
 
   // Best: ARIA role + name → getByRole(role, { name, exact: true })
-  // For 'row' role, skip exact since the row's accessible name is the full
-  // row text content and we're matching by the clicked cell's text
+  // For rows, use .filter() with a cell matcher since a row's accessible name
+  // is the concatenation of ALL cells (e.g. "foo 0 KiB 2024-01-01"), not just
+  // the filename. A cell's accessible name IS its text, so exact matching works.
   if (ariaRole && ariaName) {
-    const exact = ariaRole === 'row' ? '' : ', exact: true';
-    lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}'${exact} }).${method}();`);
+    if (ariaRole === 'row') {
+      lines.push(`${indent}await ${rowLocator(ariaName)}.${method}();`);
+    } else {
+      lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}', exact: true }).${method}();`);
+    }
     return lines;
   }
 
@@ -495,8 +522,11 @@ function generateContextMenuCode(step, indent) {
   const label = step.target?.label;
 
   if (ariaRole && ariaName) {
-    const exact = ariaRole === 'row' ? '' : ', exact: true';
-    lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}'${exact} }).click({ button: 'right' });`);
+    if (ariaRole === 'row') {
+      lines.push(`${indent}await ${rowLocator(ariaName)}.click({ button: 'right' });`);
+    } else {
+      lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}', exact: true }).click({ button: 'right' });`);
+    }
   } else if (label) {
     lines.push(`${indent}await page.getByText('${label}', { exact: true }).click({ button: 'right' });`);
   } else if (step.target?.testId) {

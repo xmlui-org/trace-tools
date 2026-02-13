@@ -492,7 +492,7 @@ Most browser errors (400/404 from existence checks, React DOM nesting warnings) 
 
 ## Appendix: Experiment — auto-update baselines on pass
 
-**Status:** Experimental. Trying this to see if it improves the workflow.
+**Status:** Working. Auto-update round-trips successfully across all 4 baselines.
 
 **Hypothesis:** After a test run where the semantic comparison passes, the capture should automatically replace the baseline. This keeps baselines fresh — always reflecting the current app's actual trace output — without manual intervention.
 
@@ -532,12 +532,22 @@ If the `.prev.json` reveals something interesting — an API call that only fire
 - Is there ever a case where you want the baseline to NOT update after a semantic pass?
 - Do `.prev.json` comparisons surface interesting differences?
 
-### First result: blocked on capture format
+### First result: blocked, then unblocked
 
 Auto-update was implemented and immediately tested. The first passing run replaced the baseline (134 lines, inspector export) with the Playwright capture (4330 lines, `_xsLogs`). The next run failed — the test generated from the capture couldn't find its selectors.
 
-The root cause: `_xsLogs` and inspector exports normalize differently. The inspector export captures ARIA metadata (ariaName, ariaRole) on interaction events, producing specific selectors like `contextmenu: xs-diff-20260127T035521.html`. The `_xsLogs` capture lacks this metadata, producing generic selectors like `contextmenu: Table`. The normalizer extracts 9 steps with textbox interactions from the baseline but only 7 steps (no textbox, no file names) from the capture.
+The root cause: `_xsLogs` and inspector exports normalize differently. The inspector export captures ARIA metadata (ariaName, ariaRole) on interaction events, producing specific selectors like `contextmenu: xs-diff-20260127T035521.html`. The `_xsLogs` capture lacked this metadata, producing generic selectors like `contextmenu: Table`.
 
-**Auto-update is disabled** until `_xsLogs` captures the same ARIA metadata as inspector exports. The `.prev.json` mechanism and the opt-in chaos concept are ready to go — they just need the capture format to match.
+**Fix 1: ARIA enrichment in `_xsLogs`.** Added `ariaRole` and `ariaName` as top-level fields in the `_xsLogs.push()` call in `AppContent.tsx`. These were already computed in the `detail` object but not promoted to the top level where the normalizer expects them. For table rows, the `ariaName` falls back to the first `<td>` cell text (the filename column) since rows can be clicked anywhere and `target.textContent` may be a size or date.
 
-**Unblocking step:** Enrich `_xsLogs` events with `ariaRole` and `ariaName` from the DOM element that triggered the event. Once the normalizer produces identical steps from both formats, auto-update can be enabled.
+**Fix 2: Row locators using `.filter()`.** A table row's accessible name in the DOM is the concatenation of ALL cells (e.g. "foo 0 KiB 2024-01-01"). This means `getByRole('row', { name: 'foo', exact: true })` never matches (too strict) and `getByRole('row', { name: 'foo' })` can be ambiguous — `name: 'test'` matches both a "test" folder and "test.xlsx". The fix: use cell-level filtering:
+
+```javascript
+page.getByRole('row').filter({ has: page.getByRole('cell', { name: 'foo', exact: true }) })
+```
+
+A cell's accessible name IS just its text, so exact matching works correctly and disambiguates "test" from "test.xlsx".
+
+**Fix 3: FormData fill fallback.** Playwright's `.fill()` doesn't fire `keydown` events in `_xsLogs`, so captures from auto-updated baselines had no textbox interactions for the fill plan. Added a fallback: when generating a submit button click, emit `fill()` calls for any formData fields not covered by textbox interactions.
+
+**Result:** Auto-update round-trip verified — 3 consecutive `run-all` passes (4/4 each), where Pass 1 auto-updates from original baselines and Pass 2+ confirms the auto-updated baselines generate working tests.
