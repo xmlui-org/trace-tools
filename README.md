@@ -3,23 +3,23 @@
 ## Table of Contents
 
 - [Overview](#overview)
-- [Standalone vs dev-environment apps](#standalone-vs-dev-environment-apps)
-- [Directory layout](#directory-layout)
 - [Setup](#setup)
-- [Inspector viewer (xs-diff.html)](#inspector-viewer-xs-diffhtml)
 - [Capturing a trace](#capturing-a-trace)
-- [Fixtures: deterministic server state](#fixtures-deterministic-server-state)
 - [Walkthrough: capturing and testing user journeys](#walkthrough-capturing-and-testing-user-journeys)
 - [Commands](#commands)
-- [Auth configuration](#auth-configuration)
-- [How selectors are generated](#how-selectors-are-generated)
-- [How semantic comparison works](#how-semantic-comparison-works)
 - [Reading the test output](#reading-the-test-output)
-- [Known limitations](#known-limitations)
-- [Opt-in app-level timing with xsTrace](#opt-in-app-level-timing-with-xstrace)
+- [How semantic comparison works](#how-semantic-comparison-works)
+- [How selectors are generated](#how-selectors-are-generated)
 - [Auto-update baselines on pass](#auto-update-baselines-on-pass)
 - [Opt-in chaos](#opt-in-chaos)
 - [Synthetic baselines](#synthetic-baselines)
+- [Opt-in app-level timing with xsTrace](#opt-in-app-level-timing-with-xstrace)
+- [Standalone vs dev-environment apps](#standalone-vs-dev-environment-apps)
+- [Directory layout](#directory-layout)
+- [Inspector viewer (xs-diff.html)](#inspector-viewer-xs-diffhtml)
+- [Fixtures: deterministic server state](#fixtures-deterministic-server-state)
+- [Auth configuration](#auth-configuration)
+- [Known limitations](#known-limitations)
 
 ## Overview
 
@@ -34,56 +34,6 @@ This works across all XMLUI apps. It has been tested on:
 
 - **core-ssh-server-ui** — a standalone app served as static files with its own login
 - **myWorkDrive-Client** — a dev-environment app run via `npm run dev` with no login required
-
-## Standalone vs dev-environment apps
-
-The two app types differ in how they're served, whether they require auth, and how the base URL is configured.
-
-| | Standalone (e.g. core-ssh-server-ui) | Dev environment (e.g. myWorkDrive-Client) |
-|---|---|---|
-| How it runs | Static files served by an external process | `npm run dev` (Vite dev server) |
-| Base URL | `http://localhost:8123/ui/` (path prefix) | `http://localhost:5173` (root) |
-| XMLUI runtime | Checked-in JS bundle (e.g. `xmlui/0.12.1.js`) | Installed via npm, built by Vite |
-
-Either type may require auth. If it does, `app-config.json` describes the login flow (see [Auth configuration](#auth-configuration)). If not, omit the file. Auth is independent of how the app is served.
-
-## Directory layout
-
-```
-your-app/
-├── test.sh                         # Entry point — run this
-├── app-config.json                 # Auth + base URL config (only if needed)
-├── traces/
-│   ├── baselines/                  # Reference traces (checked in)
-│   │   ├── enable-disable-user.json
-│   │   └── ignore-apis.txt         # APIs to exclude from semantic comparison
-│   ├── captures/                   # Output from test runs (gitignored)
-│   │   └── enable-disable-user.json
-│   └── fixtures/                   # Server filesystem state (checked in)
-│       └── shares/Documents/       # Minimal files needed by baselines
-└── trace-tools/                    # Cloned dependency (gitignored)
-    ├── generate-playwright.js      # Generates .spec.ts from a baseline trace
-    ├── distill-trace.js          # Distills steps from raw trace
-    ├── compare-traces.js           # Semantic comparison (APIs, forms, nav)
-    ├── summarize.js                # Journey summary
-    ├── auth-setup.ts               # Playwright auth (reads app-config.json)
-    ├── playwright.config.ts        # Playwright config (reads app-config.json)
-    └── xs-diff.html                # Canonical inspector viewer (copied to app)
-```
-
-### What's checked in vs transient
-
-| File | Checked in? | Purpose |
-|------|-------------|---------|
-| `test.sh` | Yes | App-level test runner |
-| `app-config.json` | Yes (if needed) | Base URL and auth configuration |
-| `traces/baselines/*.json` | Yes | Reference traces — the "known good" behavior |
-| `traces/baselines/ignore-apis.txt` | Yes (if needed) | APIs to exclude from semantic comparison |
-| `traces/captures/*.json` | No | Output from test runs, compared against baselines |
-| `traces/fixtures/` | Yes | Server filesystem state needed by baselines |
-| `trace-tools/` | No | Cloned from github.com/xmlui-org/trace-tools |
-
-Generated test files and captured traces inside `trace-tools/` are transient — created during a run and cleaned up afterward.
 
 ## Setup
 
@@ -100,25 +50,6 @@ Make sure the app is running before running tests:
 - **Standalone apps**: start the app server (e.g. for core-ssh-server-ui, the app serves at `http://localhost:8123/ui/`)
 - **Dev-environment apps**: run `npm run dev` (serves at `http://localhost:5173` by default)
 
-## Inspector viewer (xs-diff.html)
-
-The XMLUI inspector viewer is a standalone HTML file (`xs-diff.html`) that displays the trace inspector UI in an iframe. It reads `window.parent._xsSourceFiles` and `window.parent._xsLogs` from the host app to show source files, interaction traces, and ARIA metadata.
-
-The canonical copy lives in trace-tools. Each app copies it to its `public/` directory so the dev server serves it:
-
-```bash
-cp trace-tools/xs-diff.html public/xs-diff.html
-```
-
-When trace-tools updates xs-diff.html (e.g. new inspector features), downstream apps pull the update:
-
-```bash
-cd trace-tools && git pull && cd ..
-cp trace-tools/xs-diff.html public/xs-diff.html
-```
-
-The app's `public/xs-diff.html` is checked in — it's part of the app's served assets. But trace-tools is the single source of truth.
-
 ## Capturing a trace
 
 Open the XMLUI inspector in the running app and perform the user journey you want to test. When done, use the inspector's Export → Download JSON. The inspector prompts for a filename — use a descriptive name like `enable-disable-user` or `rename-file-roundtrip`. The browser saves it to your Downloads folder, e.g.:
@@ -134,37 +65,6 @@ Open the XMLUI inspector in the running app and perform the user journey you wan
 - **Don't worry about being clean.** Extra clicks, hesitations, and accidental interactions are fine. The initial capture just needs to be functionally correct — hitting the right APIs, submitting the right forms, navigating the right pages. On the first passing replay, auto-update replaces the messy human capture with a clean Playwright capture (see [Opt-in chaos](#opt-in-chaos)).
 - **Startup noise doesn't matter.** The trace will include initial data fetches and page render events from app startup. The distiller ignores these and only extracts interaction steps (clicks, form submits, API calls triggered by user actions). You can use the inspector's Clear button before starting your journey if you like, but it's not necessary.
 - **One journey per trace.** Keep each trace focused on a single user journey. This makes baselines easy to name, understand, and debug when a test fails.
-
-## Fixtures: deterministic server state
-
-Tests replay user journeys against a live app. If the app reads from a filesystem (e.g. a file manager backed by `~/mwd/shares/Documents/`), the tests depend on specific files and folders being present. A copy-paste test that starts by right-clicking `test.xlsx` will fail if `test.xlsx` doesn't exist.
-
-The `traces/fixtures/` directory stores the minimal filesystem state needed by all baselines. It's checked into the repo so any developer can set up the right state:
-
-```bash
-# Reset server filesystem to the fixture state
-rm -rf ~/mwd/shares/Documents
-cp -r traces/fixtures/shares/Documents ~/mwd/shares/Documents
-```
-
-For myWorkDrive-Client, the fixture contains:
-
-```
-traces/fixtures/shares/Documents/
-  test.xlsx                          # Used by copy-paste, cut-paste, and conflict tests
-  xs-diff-20260127T035521.html       # Used by rename test
-  foo/                               # Target folder for paste and navigation tests
-    .gitkeep
-    hello.txt                        # File inside foo (verifies folder contents)
-    bar/                             # Nested folder for breadcrumb navigation
-      .gitkeep
-```
-
-### Why roundtrips matter for fixtures
-
-Tests should be roundtrips: copy a file then delete the copy, move a file then move it back, create a folder then delete it. This ensures the server state is the same after the test as before. Without roundtrips, each run leaves behind artifacts (copied files, renamed files, extra folders) that cause conflicts on the next run — the app may show "File already exists" modals that block the test.
-
-If a test flakes and the cleanup step doesn't fire (e.g. the delete after a copy), reset the fixture state before the next run.
 
 ## Walkthrough: capturing and testing user journeys
 
@@ -408,38 +308,56 @@ Journey: 10 steps, 143 events
   APIs: GET /groups, GET /license, GET /settings, GET /status, GET /users, PUT /users/elvis
 ```
 
-## Auth configuration
+## Reading the test output
 
-Apps that require login provide an `app-config.json` in the repo root. trace-tools reads this file and runs a headless Playwright setup project to log in and save browser state before the actual test runs.
+A test run produces several kinds of results:
 
-```json
-{
-  "baseURL": "http://localhost:8123/ui/",
-  "auth": {
-    "fields": [
-      { "locator": "getByLabel", "name": "User", "value": "admin", "method": "pressSequentially" },
-      { "locator": "getByPlaceholder", "name": "Password", "value": "coressh", "method": "pressSequentially" }
-    ],
-    "submit": { "role": "button", "name": "Sign In" },
-    "waitFor": { "url": "status" }
-  }
-}
+```
+═══════════════════════════════════════════════════════════════
+                    REGRESSION TEST: create-delete-folder-roundtrip
+═══════════════════════════════════════════════════════════════
+
+PASS — Journey completed successfully
+
+MODALS:
+  Create new folder | Create new folder ...
+  Are you sure you want to delete folder "test"? | ...
+
+VISIBLE ROWS: foo
+
+Before:
+  APIs: GET /ListFolder, GET /ListShares, POST /CreateFile, POST /DeleteFolder
+  API errors: (none)
+  Mutations: POST /CreateFile ×1, POST /DeleteFolder ×1
+  Form submits: 1 (test)
+  Context menus:
+
+After:
+  APIs: GET /ListFolder, GET /ListShares, POST /CreateFile, POST /DeleteFolder
+  API errors: (none)
+  Mutations: POST /CreateFile ×1, POST /DeleteFolder ×1
+  Form submits: 1 (test)
+  Context menus:
+
+SEMANTIC: PASS — Same APIs, forms, and navigation
+═══════════════════════════════════════════════════════════════
 ```
 
-Each field specifies a Playwright locator strategy (`getByLabel`, `getByPlaceholder`) and an input method (`fill` or `pressSequentially` for inputs that are initially readonly).
+**PASS / FAIL** — Did the generated Playwright test complete? PASS means all Playwright locators resolved and all actions completed. FAIL means a selector timed out — usually because a required element is missing (wrong server state) or hasn't rendered yet (race condition).
 
-Apps that don't require login (e.g. myWorkDrive-Client) omit this file entirely. The base URL defaults to `http://localhost:5173`, or can be overridden via the `BASE_URL` environment variable.
+**MODALS** — Every modal dialog that appeared during the test, with its title and content. This is always shown, and is essential for diagnosing failures — if the test times out waiting for a selector, the MODALS section often reveals what went wrong (e.g. a "Conflict: File already exists" dialog blocking the UI).
 
-## How selectors are generated
+**VISIBLE ROWS** — Table rows visible at the end of the test. Helps diagnose selector failures when a test expects a file or folder that isn't present.
 
-The XMLUI framework captures ARIA roles and accessible names in trace events. The test generator uses these to produce Playwright selectors:
+**SEMANTIC: PASS / FAIL** — Did the app behave the same way? This compares API endpoints, API errors (409/417 etc.), mutation counts (POST/PUT/DELETE per endpoint), form submissions, and navigations between the baseline and capture. PASS means all dimensions match. FAIL means something changed — a missing API call, a different number of mutations, an error path that appeared or disappeared.
 
-- `getByRole('button', { name: 'Disable' })` — element has an ARIA role and accessible name
-- `getByRole('link', { name: 'USERS' })` — link with text content
-- `getByLabel('Name')` — form field with a label
-- `getByText('elvis', { exact: true })` — fallback when no ARIA role is available
+**BROWSER ERRORS** — Console errors from the browser during the test. Opt-in via `--browser-errors`:
 
-When an element lacks proper ARIA semantics, the generator emits `// ACCESSIBILITY GAP` — flagging the same problem a screen reader user would encounter. Known gaps are tracked at https://github.com/xmlui-org/trace-tools/issues.
+```bash
+./test.sh run create-delete-folder-roundtrip --browser-errors
+```
+
+Most browser errors (400/404 from existence checks, React DOM nesting warnings) are noise, so this is off by default.
 
 ## How semantic comparison works
 
@@ -492,60 +410,111 @@ The `--ignore-api` flag can also be used directly with `compare-traces.js`:
 node compare-traces.js --semantic --ignore-api /license before.json after.json
 ```
 
-## Reading the test output
+## How selectors are generated
 
-A test run produces several kinds of results:
+The XMLUI framework captures ARIA roles and accessible names in trace events. The test generator uses these to produce Playwright selectors:
 
-```
-═══════════════════════════════════════════════════════════════
-                    REGRESSION TEST: create-delete-folder-roundtrip
-═══════════════════════════════════════════════════════════════
+- `getByRole('button', { name: 'Disable' })` — element has an ARIA role and accessible name
+- `getByRole('link', { name: 'USERS' })` — link with text content
+- `getByLabel('Name')` — form field with a label
+- `getByText('elvis', { exact: true })` — fallback when no ARIA role is available
 
-PASS — Journey completed successfully
+When an element lacks proper ARIA semantics, the generator emits `// ACCESSIBILITY GAP` — flagging the same problem a screen reader user would encounter. Known gaps are tracked at https://github.com/xmlui-org/trace-tools/issues.
 
-MODALS:
-  Create new folder | Create new folder ...
-  Are you sure you want to delete folder "test"? | ...
+## Auto-update baselines on pass
 
-VISIBLE ROWS: foo
+When the semantic comparison passes, the capture automatically replaces the baseline. The previous baseline is saved as `<journey>.prev.json`.
 
-Before:
-  APIs: GET /ListFolder, GET /ListShares, POST /CreateFile, POST /DeleteFolder
-  API errors: (none)
-  Mutations: POST /CreateFile ×1, POST /DeleteFolder ×1
-  Form submits: 1 (test)
-  Context menus:
+The semantic comparison (API calls, form submissions, navigation) is what detects regressions. The raw trace events (event counts, timing, rendering details) vary between runs even when behavior is identical. Auto-updating on pass means:
 
-After:
-  APIs: GET /ListFolder, GET /ListShares, POST /CreateFile, POST /DeleteFolder
-  API errors: (none)
-  Mutations: POST /CreateFile ×1, POST /DeleteFolder ×1
-  Form submits: 1 (test)
-  Context menus:
+- Baselines always reflect current app behavior
+- `git diff` on baselines shows exactly when real behavior changed
+- No manual `./test.sh update` step to forget
+- The manual `update` command still exists for accepting intentional behavior changes after a semantic FAIL
 
-SEMANTIC: PASS — Same APIs, forms, and navigation
-═══════════════════════════════════════════════════════════════
-```
+### How it works
 
-**PASS / FAIL** — Did the generated Playwright test complete? PASS means all Playwright locators resolved and all actions completed. FAIL means a selector timed out — usually because a required element is missing (wrong server state) or hasn't rendered yet (race condition).
+The first baseline for any journey is a raw human capture — extra clicks, hesitations, stop-and-start behavior, background events. On the first passing replay, auto-update replaces it with a clean Playwright capture — deterministic, minimal, no human noise. This converges in one step: the first clean replay is already the stable baseline. Subsequent passes produce essentially identical captures.
 
-**MODALS** — Every modal dialog that appeared during the test, with its title and content. This is always shown, and is essential for diagnosing failures — if the test times out waiting for a selector, the MODALS section often reveals what went wrong (e.g. a "Conflict: File already exists" dialog blocking the UI).
-
-**VISIBLE ROWS** — Table rows visible at the end of the test. Helps diagnose selector failures when a test expects a file or folder that isn't present.
-
-**SEMANTIC: PASS / FAIL** — Did the app behave the same way? This compares API endpoints, API errors (409/417 etc.), mutation counts (POST/PUT/DELETE per endpoint), form submissions, and navigations between the baseline and capture. PASS means all dimensions match. FAIL means something changed — a missing API call, a different number of mutations, an error path that appeared or disappeared.
-
-**BROWSER ERRORS** — Console errors from the browser during the test. Opt-in via `--browser-errors`:
+The `.prev.json` preserves the prior version. For the first auto-update, that's the original human capture:
 
 ```bash
-./test.sh run create-delete-folder-roundtrip --browser-errors
+# What changed between the human capture and the clean replay?
+node trace-tools/compare-traces.js --semantic traces/baselines/rename-file-roundtrip.prev.json traces/baselines/rename-file-roundtrip.json
 ```
 
-Most browser errors (400/404 from existence checks, React DOM nesting warnings) are noise, so this is off by default.
+### Implementation notes
 
-## Known limitations
+Auto-update required three fixes to make captures round-trip as baselines:
 
-- **Interleaved form interactions.** When capturing a trace, if you interact with elements behind a modal form while the form is still open (e.g. clicking a file in the background while a New Folder dialog is open, or starting a second form before submitting the first), the trace records these events chronologically — interleaved with the form's keydown events. The test generator groups form fill and submit steps together and defers background interactions to after the submit, but it cannot handle two different forms whose interactions overlap in the trace. For best results, complete one form before starting another. We aim to improve tolerance of real-world stop-and-start behavior, potentially by reconstructing fill values from keydown sequences, but for now cleaner captures produce more reliable tests.
+1. **ARIA enrichment in `_xsLogs`** (`AppContent.tsx`). Promoted `ariaRole` and `ariaName` to top-level fields in interaction events so the distiller extracts the same steps from captures as from inspector exports. For table rows, falls back to first `<td>` cell text since rows can be clicked anywhere.
+
+2. **Row locators using `.filter()`** (`generate-playwright.js`). A row's accessible name is all cells concatenated, so `exact: true` never matches and substring matching is ambiguous. Row selectors use `page.getByRole('row').filter({ has: page.getByRole('cell', { name, exact: true }) })` instead.
+
+3. **FormData fill fallback** (`generate-playwright.js`). Playwright's `.fill()` doesn't fire `keydown` events in `_xsLogs`, so captures lack textbox interactions. On submit, any formData fields not covered by textbox interactions get `fill()` calls generated from the field values.
+
+## Opt-in chaos
+
+Baselines can come from two sources: clean Playwright captures (synthetic) or messy human captures (chaotic). By default we use synthetic baselines for convenience — they're deterministic and easy to generate. But human captures introduce real-world noise: hesitations, extra clicks, stop-and-start behavior, background events that fire during pauses. This chaos is sometimes good — it exercises code paths that clean replays never hit — and sometimes bad — there's nothing to learn from a stray click.
+
+To switch from synthetic to chaotic, capture a baseline manually in the inspector and save it:
+
+```bash
+./test.sh save ~/Downloads/rename-file-roundtrip.json rename-file-roundtrip
+```
+
+On the first passing replay, auto-update replaces the chaotic baseline with a clean one, but the `.prev.json` preserves the original. If it reveals something interesting — an API call that only fires during slow human interaction, a modal that only appears when you pause between steps — that's a signal worth investigating. The chaos found it; the clean baseline wouldn't have.
+
+## Synthetic baselines
+
+Suppose you have this.
+
+```
+~/myWorkDrive-Client$ ./test.sh list
+Available baselines:
+  copy-paste-delete-roundtrip (167 events)
+  create-delete-folder-roundtrip (150 events)
+  cut-paste-file-roundtrip (188 events)
+  delete-nonempty-folder (200 events)
+```
+
+You want to add these.
+
+```
+Name: folder-tree-navigate
+Journey: Expand tree node → click subfolder → verify file list updates → click parent → back to start
+Key APIs: GET /ListFolder (multiple)
+────────────────────────────────────────
+Name: breadcrumb-navigate
+Journey: Double-click into subfolder → double-click deeper → click breadcrumb link back to root
+Key APIs: GET /ListFolder (multiple)
+────────────────────────────────────────
+Name: paste-conflict-replace
+Journey: Copy file → paste in same parent via tree → 409 → "Replace"
+Key APIs: POST /CopyFile (409 + retry)
+────────────────────────────────────────
+Name: delete-nonempty-folder
+Journey: Create folder → copy file into it → delete folder → confirm "not empty" recursive
+Key APIs: POST /CreateFile, POST /CopyFile, POST /DeleteFolder (417 + retry)
+```
+
+The system can learn how to perform and capture them, as seen in this video.
+
+[![Watch the video](https://github.com/user-attachments/assets/cddb7cda-1804-4516-9712-5c4509b128cd)](https://jonudell.info/video/learning-to-make-synthetic-journeys.mp4)
+
+```
+~/myWorkDrive-Client$ ./test.sh list
+Available baselines:
+  breadcrumb-navigate (72 events)
+  copy-paste-delete-roundtrip (167 events)
+  create-delete-folder-roundtrip (150 events)
+  cut-paste-file-roundtrip (188 events)
+  delete-nonempty-folder (200 events)
+  folder-tree-navigate (59 events)
+  paste-conflict-keep-both (200 events)
+  paste-conflict-replace (200 events)
+  rename-file-roundtrip (143 events)
+```
 
 ## Opt-in app-level timing with xsTrace
 
@@ -676,97 +645,128 @@ The remaining ~439ms comes from three sources, all requiring engine changes:
 
 The goal: make composition cost O(changed components), not O(total components). XMLUI's value is composability — developers should write clean, readable component trees without worrying about depth.
 
-## Auto-update baselines on pass
+## Standalone vs dev-environment apps
 
-When the semantic comparison passes, the capture automatically replaces the baseline. The previous baseline is saved as `<journey>.prev.json`.
+The two app types differ in how they're served, whether they require auth, and how the base URL is configured.
 
-The semantic comparison (API calls, form submissions, navigation) is what detects regressions. The raw trace events (event counts, timing, rendering details) vary between runs even when behavior is identical. Auto-updating on pass means:
+| | Standalone (e.g. core-ssh-server-ui) | Dev environment (e.g. myWorkDrive-Client) |
+|---|---|---|
+| How it runs | Static files served by an external process | `npm run dev` (Vite dev server) |
+| Base URL | `http://localhost:8123/ui/` (path prefix) | `http://localhost:5173` (root) |
+| XMLUI runtime | Checked-in JS bundle (e.g. `xmlui/0.12.1.js`) | Installed via npm, built by Vite |
 
-- Baselines always reflect current app behavior
-- `git diff` on baselines shows exactly when real behavior changed
-- No manual `./test.sh update` step to forget
-- The manual `update` command still exists for accepting intentional behavior changes after a semantic FAIL
+Either type may require auth. If it does, `app-config.json` describes the login flow (see [Auth configuration](#auth-configuration)). If not, omit the file. Auth is independent of how the app is served.
 
-### How it works
+## Directory layout
 
-The first baseline for any journey is a raw human capture — extra clicks, hesitations, stop-and-start behavior, background events. On the first passing replay, auto-update replaces it with a clean Playwright capture — deterministic, minimal, no human noise. This converges in one step: the first clean replay is already the stable baseline. Subsequent passes produce essentially identical captures.
+```
+your-app/
+├── test.sh                         # Entry point — run this
+├── app-config.json                 # Auth + base URL config (only if needed)
+├── traces/
+│   ├── baselines/                  # Reference traces (checked in)
+│   │   ├── enable-disable-user.json
+│   │   └── ignore-apis.txt         # APIs to exclude from semantic comparison
+│   ├── captures/                   # Output from test runs (gitignored)
+│   │   └── enable-disable-user.json
+│   └── fixtures/                   # Server filesystem state (checked in)
+│       └── shares/Documents/       # Minimal files needed by baselines
+└── trace-tools/                    # Cloned dependency (gitignored)
+    ├── generate-playwright.js      # Generates .spec.ts from a baseline trace
+    ├── distill-trace.js          # Distills steps from raw trace
+    ├── compare-traces.js           # Semantic comparison (APIs, forms, nav)
+    ├── summarize.js                # Journey summary
+    ├── auth-setup.ts               # Playwright auth (reads app-config.json)
+    ├── playwright.config.ts        # Playwright config (reads app-config.json)
+    └── xs-diff.html                # Canonical inspector viewer (copied to app)
+```
 
-The `.prev.json` preserves the prior version. For the first auto-update, that's the original human capture:
+### What's checked in vs transient
+
+| File | Checked in? | Purpose |
+|------|-------------|---------|
+| `test.sh` | Yes | App-level test runner |
+| `app-config.json` | Yes (if needed) | Base URL and auth configuration |
+| `traces/baselines/*.json` | Yes | Reference traces — the "known good" behavior |
+| `traces/baselines/ignore-apis.txt` | Yes (if needed) | APIs to exclude from semantic comparison |
+| `traces/captures/*.json` | No | Output from test runs, compared against baselines |
+| `traces/fixtures/` | Yes | Server filesystem state needed by baselines |
+| `trace-tools/` | No | Cloned from github.com/xmlui-org/trace-tools |
+
+Generated test files and captured traces inside `trace-tools/` are transient — created during a run and cleaned up afterward.
+
+## Inspector viewer (xs-diff.html)
+
+The XMLUI inspector viewer is a standalone HTML file (`xs-diff.html`) that displays the trace inspector UI in an iframe. It reads `window.parent._xsSourceFiles` and `window.parent._xsLogs` from the host app to show source files, interaction traces, and ARIA metadata.
+
+The canonical copy lives in trace-tools. Each app copies it to its `public/` directory so the dev server serves it:
 
 ```bash
-# What changed between the human capture and the clean replay?
-node trace-tools/compare-traces.js --semantic traces/baselines/rename-file-roundtrip.prev.json traces/baselines/rename-file-roundtrip.json
+cp trace-tools/xs-diff.html public/xs-diff.html
 ```
 
-### Implementation notes
-
-Auto-update required three fixes to make captures round-trip as baselines:
-
-1. **ARIA enrichment in `_xsLogs`** (`AppContent.tsx`). Promoted `ariaRole` and `ariaName` to top-level fields in interaction events so the distiller extracts the same steps from captures as from inspector exports. For table rows, falls back to first `<td>` cell text since rows can be clicked anywhere.
-
-2. **Row locators using `.filter()`** (`generate-playwright.js`). A row's accessible name is all cells concatenated, so `exact: true` never matches and substring matching is ambiguous. Row selectors use `page.getByRole('row').filter({ has: page.getByRole('cell', { name, exact: true }) })` instead.
-
-3. **FormData fill fallback** (`generate-playwright.js`). Playwright's `.fill()` doesn't fire `keydown` events in `_xsLogs`, so captures lack textbox interactions. On submit, any formData fields not covered by textbox interactions get `fill()` calls generated from the field values.
-
-## Opt-in chaos
-
-Baselines can come from two sources: clean Playwright captures (synthetic) or messy human captures (chaotic). By default we use synthetic baselines for convenience — they're deterministic and easy to generate. But human captures introduce real-world noise: hesitations, extra clicks, stop-and-start behavior, background events that fire during pauses. This chaos is sometimes good — it exercises code paths that clean replays never hit — and sometimes bad — there's nothing to learn from a stray click.
-
-To switch from synthetic to chaotic, capture a baseline manually in the inspector and save it:
+When trace-tools updates xs-diff.html (e.g. new inspector features), downstream apps pull the update:
 
 ```bash
-./test.sh save ~/Downloads/rename-file-roundtrip.json rename-file-roundtrip
+cd trace-tools && git pull && cd ..
+cp trace-tools/xs-diff.html public/xs-diff.html
 ```
 
-On the first passing replay, auto-update replaces the chaotic baseline with a clean one, but the `.prev.json` preserves the original. If it reveals something interesting — an API call that only fires during slow human interaction, a modal that only appears when you pause between steps — that's a signal worth investigating. The chaos found it; the clean baseline wouldn't have.
+The app's `public/xs-diff.html` is checked in — it's part of the app's served assets. But trace-tools is the single source of truth.
 
-## Synthetic baselines
+## Fixtures: deterministic server state
 
-Suppose you have this.
+Tests replay user journeys against a live app. If the app reads from a filesystem (e.g. a file manager backed by `~/mwd/shares/Documents/`), the tests depend on specific files and folders being present. A copy-paste test that starts by right-clicking `test.xlsx` will fail if `test.xlsx` doesn't exist.
 
-```
-~/myWorkDrive-Client$ ./test.sh list
-Available baselines:
-  copy-paste-delete-roundtrip (167 events)
-  create-delete-folder-roundtrip (150 events)
-  cut-paste-file-roundtrip (188 events)
-  delete-nonempty-folder (200 events)
-```
+The `traces/fixtures/` directory stores the minimal filesystem state needed by all baselines. It's checked into the repo so any developer can set up the right state:
 
-You want to add these.
-
-```
-Name: folder-tree-navigate
-Journey: Expand tree node → click subfolder → verify file list updates → click parent → back to start
-Key APIs: GET /ListFolder (multiple)
-────────────────────────────────────────
-Name: breadcrumb-navigate
-Journey: Double-click into subfolder → double-click deeper → click breadcrumb link back to root
-Key APIs: GET /ListFolder (multiple)
-────────────────────────────────────────
-Name: paste-conflict-replace
-Journey: Copy file → paste in same parent via tree → 409 → "Replace"
-Key APIs: POST /CopyFile (409 + retry)
-────────────────────────────────────────
-Name: delete-nonempty-folder
-Journey: Create folder → copy file into it → delete folder → confirm "not empty" recursive
-Key APIs: POST /CreateFile, POST /CopyFile, POST /DeleteFolder (417 + retry)
+```bash
+# Reset server filesystem to the fixture state
+rm -rf ~/mwd/shares/Documents
+cp -r traces/fixtures/shares/Documents ~/mwd/shares/Documents
 ```
 
-The system can learn how to perform and capture them, as seen in this video.
-
-[![Watch the video](https://github.com/user-attachments/assets/cddb7cda-1804-4516-9712-5c4509b128cd)](https://jonudell.info/video/learning-to-make-synthetic-journeys.mp4)
+For myWorkDrive-Client, the fixture contains:
 
 ```
-~/myWorkDrive-Client$ ./test.sh list
-Available baselines:
-  breadcrumb-navigate (72 events)
-  copy-paste-delete-roundtrip (167 events)
-  create-delete-folder-roundtrip (150 events)
-  cut-paste-file-roundtrip (188 events)
-  delete-nonempty-folder (200 events)
-  folder-tree-navigate (59 events)
-  paste-conflict-keep-both (200 events)
-  paste-conflict-replace (200 events)
-  rename-file-roundtrip (143 events)
+traces/fixtures/shares/Documents/
+  test.xlsx                          # Used by copy-paste, cut-paste, and conflict tests
+  xs-diff-20260127T035521.html       # Used by rename test
+  foo/                               # Target folder for paste and navigation tests
+    .gitkeep
+    hello.txt                        # File inside foo (verifies folder contents)
+    bar/                             # Nested folder for breadcrumb navigation
+      .gitkeep
 ```
+
+### Why roundtrips matter for fixtures
+
+Tests should be roundtrips: copy a file then delete the copy, move a file then move it back, create a folder then delete it. This ensures the server state is the same after the test as before. Without roundtrips, each run leaves behind artifacts (copied files, renamed files, extra folders) that cause conflicts on the next run — the app may show "File already exists" modals that block the test.
+
+If a test flakes and the cleanup step doesn't fire (e.g. the delete after a copy), reset the fixture state before the next run.
+
+## Auth configuration
+
+Apps that require login provide an `app-config.json` in the repo root. trace-tools reads this file and runs a headless Playwright setup project to log in and save browser state before the actual test runs.
+
+```json
+{
+  "baseURL": "http://localhost:8123/ui/",
+  "auth": {
+    "fields": [
+      { "locator": "getByLabel", "name": "User", "value": "admin", "method": "pressSequentially" },
+      { "locator": "getByPlaceholder", "name": "Password", "value": "coressh", "method": "pressSequentially" }
+    ],
+    "submit": { "role": "button", "name": "Sign In" },
+    "waitFor": { "url": "status" }
+  }
+}
+```
+
+Each field specifies a Playwright locator strategy (`getByLabel`, `getByPlaceholder`) and an input method (`fill` or `pressSequentially` for inputs that are initially readonly).
+
+Apps that don't require login (e.g. myWorkDrive-Client) omit this file entirely. The base URL defaults to `http://localhost:5173`, or can be overridden via the `BASE_URL` environment variable.
+
+## Known limitations
+
+- **Interleaved form interactions.** When capturing a trace, if you interact with elements behind a modal form while the form is still open (e.g. clicking a file in the background while a New Folder dialog is open, or starting a second form before submitting the first), the trace records these events chronologically — interleaved with the form's keydown events. The test generator groups form fill and submit steps together and defers background interactions to after the submit, but it cannot handle two different forms whose interactions overlap in the trace. For best results, complete one form before starting another. We aim to improve tolerance of real-world stop-and-start behavior, potentially by reconstructing fill values from keydown sequences, but for now cleaner captures produce more reliable tests.
