@@ -589,6 +589,31 @@ The same methodology ruled out other hypotheses. Enforcing truly fixed card heig
 
 Without `xsTrace`, these would all have been plausible guesses requiring significant effort to test. With it, the data pointed directly to the right lever and ruled out the rest.
 
+### Component depth: isolating the real cost
+
+With all app-level levers tested, the next question was whether the per-keystroke cost comes from the engine's base per-item overhead or from the component tree inside each item. Replacing the full EventCard (~12 child components) with a bare `<Text value="{$item.title}" />` dropped the keystroke from 531ms to 102ms — an 81% reduction.
+
+Three data points confirm linear scaling between component count and cost:
+
+| Template | ~Components/item | Total | Per item |
+|----------|-----------------|-------|----------|
+| Bare Text | 1 | 102ms | 2.0ms |
+| Stripped Card (Card, VStack, Text ×4) | 6 | 240ms | 4.8ms |
+| Full EventCard (+ Link, Markdown, HStack, AddToCalendar, Checkbox) | 12+ | 531ms | 10.6ms |
+
+Every phase scales with component count — not just reconciliation:
+
+| Phase | Text (1) | Stripped (6) | Full (12+) |
+|-------|----------|-------------|------------|
+| State processing | ~17ms | ~56ms | ~104ms |
+| Reactive re-eval | ~51ms | ~112ms | ~298ms |
+| filterEvents | ~2ms | ~2ms | ~2ms |
+| Reconciliation | ~25ms | ~63ms | ~118ms |
+
+The engine's 6-layer StateContainer pipeline runs for every component in the tree, including leaf components like Text and SpaceFiller that have no state of their own. Simple Text components cost ~0.55ms each per item; heavier components (Link, Markdown, AddToCalendar) cost ~0.97ms each. At 50 items × 12 components, that's 600 pipeline evaluations per keystroke.
+
+This reframes the optimization as an engine concern, not an app concern. XMLUI's value is composability — developers should write clean, readable component trees without worrying about depth. The engine should make composition cost O(changed components), not O(total components).
+
 ## TBD
 
 - **Resilience to XMLUI core rendering changes.** The test generator produces Playwright selectors from ARIA roles and accessible names captured in the trace. These depend on how the XMLUI framework renders components to the DOM — what HTML elements are used, how labels are associated with inputs, which elements get implicit ARIA roles. When the framework's rendering changes (e.g. a form input component switches from `<div>` wrappers to native `<fieldset>`, or label association moves from `htmlFor` to `aria-labelledby`), the captured trace metadata may change, breaking previously working selectors. How should trace-tools handle this? Options include: pinning traces to a framework version, detecting selector failures and falling back to alternative strategies, or decoupling the semantic comparison (which is framework-agnostic) from the Playwright test generation (which is framework-sensitive).
