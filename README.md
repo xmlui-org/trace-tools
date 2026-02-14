@@ -526,6 +526,69 @@ Most browser errors (400/404 from existence checks, React DOM nesting warnings) 
 
 - **Interleaved form interactions.** When capturing a trace, if you interact with elements behind a modal form while the form is still open (e.g. clicking a file in the background while a New Folder dialog is open, or starting a second form before submitting the first), the trace records these events chronologically — interleaved with the form's keydown events. The test generator groups form fill and submit steps together and defers background interactions to after the submit, but it cannot handle two different forms whose interactions overlap in the trace. For best results, complete one form before starting another. We aim to improve tolerance of real-world stop-and-start behavior, potentially by reconstructing fill values from keydown sequences, but for now cleaner captures produce more reliable tests.
 
+## Opt-in app-level timing with xsTrace
+
+The XMLUI inspector shows handler-level timing (how long `onDidChange` or `onClick` handlers take), but treats each handler as a single block. If a handler triggers reactive re-evaluation that calls multiple expensive functions, the inspector can't tell you which one is slow.
+
+`xs-trace.js` bridges this gap. Include it in any XMLUI app:
+
+```html
+<script src="xs-trace.js"></script>
+```
+
+Then wrap expensive function calls:
+
+```js
+var _filterEvents = filterEvents;
+window.filterEvents = function(events, term) {
+  return window.xsTrace
+    ? window.xsTrace("filterEvents", function() { return _filterEvents(events, term); })
+    : _filterEvents(events, term);
+};
+```
+
+Entries appear as `app:timing` in the inspector timeline alongside engine-generated `handler:start/complete` and `api:start/complete` entries.
+
+**Implementation note:** Save a reference to the original function before overwriting `window.filterEvents`. In a non-module script, top-level function declarations *are* `window.filterEvents` — overwriting without saving causes infinite recursion.
+
+### How it enables analysis: Community Calendar example
+
+The Community Calendar app displays ~800 events in a virtualized List with per-keystroke search filtering. The inspector showed each keystroke taking ~859ms, but couldn't reveal where the time was spent. After wrapping `filterEvents` and `dedupeEvents` with `xsTrace`, the inspector timeline broke down each keystroke into three phases:
+
+| Phase | Duration | What's happening |
+|-------|----------|-----------------|
+| `handler:start` → `state:changes` | ~200ms | Engine processes state change |
+| `state:changes` → `filterEvents` | ~414ms | Reactive re-evaluation |
+| `filterEvents` itself | **~2ms** | O(n) scan over ~800 events |
+| `filterEvents` → `handler:complete` | ~235ms | React reconciliation |
+
+This immediately ruled out several optimization strategies: server-side full-text search would not help (filtering is 2ms, not a bottleneck), and pre-computing the data array was unlikely to help (the reactive re-evaluation gap is engine-internal, not expression complexity). Without `xsTrace`, these would have been plausible hypotheses requiring significant implementation effort to test.
+
+The pre-compute hypothesis was tested anyway (three iterations) and confirmed: simplifying the List `data` expression from a complex nested call to a simple `window.filterEvents(window.preparedEvents, filterTerm)` saved only ~30ms of the ~414ms reactive gap. The cost is in XMLUI's reactive infrastructure, not in evaluating the expression.
+
+The breakdown also guided the fix. With the bottleneck identified as reactive overhead + React reconciliation (not filtering), the effective lever was reducing the List's `limit` from 100 to 50 — halving the number of virtual React elements to reconcile per keystroke. Measured result:
+
+| Phase | limit=100 | limit=50 | Savings |
+|-------|-----------|----------|---------|
+| State processing | ~200ms | ~104ms | ~96ms |
+| Reactive re-eval | ~414ms | ~298ms | ~116ms |
+| filterEvents | ~2ms | ~2ms | 0ms |
+| Reconciliation | ~235ms | ~118ms | ~117ms |
+| **Total** | **859ms** | **531ms** | **328ms (38%)** |
+
+The tradeoff — users scroll 50 events instead of 100 before needing search — is negligible when search is one click away.
+
+The same methodology ruled out other hypotheses. Enforcing truly fixed card heights (to eliminate layout variability) showed identical reconciliation times — `fixedItemSize="true"` already handles that at the virtualizer level. Pre-computing the data array to simplify the reactive expression saved only ~30ms of a ~400ms gap. The full scorecard:
+
+| Lever | Effect on first keystroke |
+|-------|--------------------------|
+| Pre-compute data array | Dead end (0-6%) |
+| Fixed card height | No effect (noise) |
+| fixedItemSize true vs false | No effect at limit=50 (noise) |
+| **limit 100→50** | **38% improvement (859→531ms)** |
+
+Without `xsTrace`, these would all have been plausible guesses requiring significant effort to test. With it, the data pointed directly to the right lever and ruled out the rest.
+
 ## TBD
 
 - **Resilience to XMLUI core rendering changes.** The test generator produces Playwright selectors from ARIA roles and accessible names captured in the trace. These depend on how the XMLUI framework renders components to the DOM — what HTML elements are used, how labels are associated with inputs, which elements get implicit ARIA roles. When the framework's rendering changes (e.g. a form input component switches from `<div>` wrappers to native `<fieldset>`, or label association moves from `htmlFor` to `aria-labelledby`), the captured trace metadata may change, breaking previously working selectors. How should trace-tools handle this? Options include: pinning traces to a framework version, detecting selector failures and falling back to alternative strategies, or decoupling the semantic comparison (which is framework-agnostic) from the Playwright test generation (which is framework-sensitive).
