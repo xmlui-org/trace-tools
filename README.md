@@ -1,5 +1,25 @@
 # Regression Testing with Trace Tools
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Standalone vs dev-environment apps](#standalone-vs-dev-environment-apps)
+- [Directory layout](#directory-layout)
+- [Setup](#setup)
+- [Inspector viewer (xs-diff.html)](#inspector-viewer-xs-diffhtml)
+- [Capturing a trace](#capturing-a-trace)
+- [Fixtures: deterministic server state](#fixtures-deterministic-server-state)
+- [Walkthrough: capturing and testing user journeys](#walkthrough-capturing-and-testing-user-journeys)
+- [Commands](#commands)
+- [Auth configuration](#auth-configuration)
+- [How selectors are generated](#how-selectors-are-generated)
+- [How semantic comparison works](#how-semantic-comparison-works)
+- [Reading the test output](#reading-the-test-output)
+- [Known limitations](#known-limitations)
+- [Opt-in app-level timing with xsTrace](#opt-in-app-level-timing-with-xstrace)
+- [Auto-update baselines on pass](#auto-update-baselines-on-pass)
+- [Synthetic baselines](#synthetic-baselines)
+
 ## Overview
 
 XMLUI apps use [trace-tools](https://github.com/xmlui-org/trace-tools) to auto-generate Playwright regression tests from XMLUI inspector traces. The workflow:
