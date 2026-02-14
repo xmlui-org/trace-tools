@@ -578,16 +578,7 @@ The breakdown also guided the fix. With the bottleneck identified as reactive ov
 
 The tradeoff — users scroll 50 events instead of 100 before needing search — is negligible when search is one click away.
 
-The same methodology ruled out other hypotheses. Enforcing truly fixed card heights (to eliminate layout variability) showed identical reconciliation times — `fixedItemSize="true"` already handles that at the virtualizer level. Pre-computing the data array to simplify the reactive expression saved only ~30ms of a ~400ms gap. The full scorecard:
-
-| Lever | Effect on first keystroke |
-|-------|--------------------------|
-| Pre-compute data array | Dead end (0-6%) |
-| Fixed card height | No effect (noise) |
-| fixedItemSize true vs false | No effect at limit=50 (noise) |
-| **limit 100→50** | **38% improvement (859→531ms)** |
-
-Without `xsTrace`, these would all have been plausible guesses requiring significant effort to test. With it, the data pointed directly to the right lever and ruled out the rest.
+The same methodology ruled out other hypotheses. Enforcing truly fixed card heights (to eliminate layout variability) showed identical reconciliation times — `fixedItemSize="true"` already handles that at the virtualizer level. Pre-computing the data array to simplify the reactive expression saved only ~30ms of a ~400ms gap.
 
 ### Component depth: isolating the real cost
 
@@ -610,9 +601,59 @@ Every phase scales with component count — not just reconciliation:
 | filterEvents | ~2ms | ~2ms | ~2ms |
 | Reconciliation | ~25ms | ~63ms | ~118ms |
 
-The engine's 6-layer StateContainer pipeline runs for every component in the tree, including leaf components like Text and SpaceFiller that have no state of their own. Simple Text components cost ~0.55ms each per item; heavier components (Link, Markdown, AddToCalendar) cost ~0.97ms each. At 50 items × 12 components, that's 600 pipeline evaluations per keystroke.
+### Engine internals: why every component pays
 
-This reframes the optimization as an engine concern, not an app concern. XMLUI's value is composability — developers should write clean, readable component trees without worrying about depth. The engine should make composition cost O(changed components), not O(total components).
+The XMLUI engine is **not** a signals/observables system — it's built entirely on React state with a custom expression evaluation layer. The rendering pipeline has three tiers:
+
+1. **ContainerWrapper → StateContainer → Container** — for components with `vars`, `loaders`, `uses`, `contextVars`, `functions`, or `scriptCollected`. Assembles state through a 6-layer pipeline (parent state, reducer, APIs, context vars, two-pass local variable resolution, routing params). Each layer creates intermediate objects wrapped in `useShallowCompareMemoize`.
+
+2. **ComponentAdapter** — for everything else (leaf components like Text, Icon, SpaceFiller). The `isContainerLike()` check in `ComponentWrapper.tsx` routes them here, skipping the 6-layer pipeline. But ComponentAdapter itself runs **~25 React hooks** per render — about 15 of which are unnecessary for simple leaves (inspector hooks, init/cleanup lifecycle, API-bound detection, sync callback lookup, action lookup, context var extraction).
+
+3. **The renderChild instability** — `Container.tsx`'s `stableRenderChild` callback has `componentState` in its `useCallback` deps. When `filterTerm` changes, this recreates the callback, defeating `React.memo` on every list item. **All 50 items fully re-render on every keystroke** even though only the parent's `filterTerm` changed. This is intentional — callback identity is the change notification mechanism. Stabilizing it would break state propagation to children.
+
+### XMLUI 0.12.1 regression: console.log in production
+
+Upgrading from 0.12.0 to 0.12.1 initially showed a 3x regression (531ms → 1620ms). Comparing the two versions' source revealed 30 unconditional `console.log` calls added across the rendering pipeline (`StateContainer.tsx`, `Container.tsx`, `ComponentWrapper.tsx`, `ComponentAdapter.tsx`, etc.), firing on every render of every component. Suppressing them (`console.log = function(){};` before loading the bundle) eliminated the entire regression — 0.12.1 without logs is actually 12% *faster* than 0.12.0:
+
+| Action | 0.12.0 | 0.12.1 (with logs) | 0.12.1 (no logs) |
+|--------|--------|-------------------|-----------------|
+| Search icon click | ~335ms | 1590ms | **340ms** |
+| First "j" keystroke | ~531ms | 1620ms | **467ms** |
+
+### LeafComponentAdapter: fast path for stateless components
+
+Since React's Rules of Hooks forbid conditional hook calls, the 15 unnecessary hooks in `ComponentAdapter` can't be skipped inline. The solution: a separate `LeafComponentAdapter` component with only ~10 essential hooks (valueExtractor, layout CSS, style, registry lookup, when check, renderer call). Routed via `isLeafLike()` in `ComponentWrapper.tsx` — true for components with no user-defined events and no non-text children.
+
+| Action | 0.12.0 | 0.12.1 (no logs) | 0.12.1 + LeafAdapter |
+|--------|--------|-----------------|---------------------|
+| Search icon click | ~335ms | 340ms | **313ms** |
+| First "j" keystroke | ~531ms | 467ms | **439ms** |
+
+The gains are modest (6% over 0.12.1-no-logs) because the skipped hooks are individually cheap — React's `useCallback`/`useMemo` with stable deps are near-zero cost. The remaining cost is in hooks that do real work: expression evaluation, layout resolution, style computation.
+
+### Cumulative scorecard
+
+| Lever | Effect on first keystroke |
+|-------|--------------------------|
+| Pre-compute data array | Dead end (0-6%) |
+| Fixed card height | No effect (noise) |
+| fixedItemSize true vs false | No effect (noise) |
+| **limit 100→50** | **38% improvement (859→531ms)** |
+| **0.12.1 (with log suppression)** | **12% improvement (531→467ms)** |
+| **LeafComponentAdapter** | **6% improvement (467→439ms)** |
+| **Combined (all three)** | **49% improvement (859→439ms)** |
+
+Without `xsTrace`, these would all have been plausible guesses requiring significant effort to test. With it, the data pointed directly to the effective levers and ruled out the rest.
+
+### What would move the needle further
+
+The remaining ~439ms comes from three sources, all requiring engine changes:
+
+1. **All 50 items re-render on every keystroke** — the `renderChild` instability defeats React.memo for all list items. An item-level re-render boundary (only re-render items whose `$item` or referenced state changed) would be the single biggest win.
+2. **Hooks that do real work** — `valueExtractor` (expression evaluation), layout CSS resolution, and `useComponentStyle` involve non-trivial computation per component per render.
+3. **ComponentWrapper data transforms** — four data-source transforms run for every component before the leaf/adapter branch, even when no transforms are needed.
+
+The goal: make composition cost O(changed components), not O(total components). XMLUI's value is composability — developers should write clean, readable component trees without worrying about depth.
 
 ## TBD
 
