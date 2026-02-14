@@ -518,7 +518,7 @@ Available baselines:
 
 ## Opt-in app-level timing with xsTrace
 
-The Community Calendar's search felt slow on the first keystroke. With `xsTrace` instrumentation — available to any trace-tools-aware app — we quickly experimented with different approaches and arrived at a 49% improvement. The first click is noticeably snappier.
+The Community Calendar's search felt slow on the first keystroke. With `xsTrace` instrumentation — available to any trace-tools-aware app — we quickly experimented with different approaches and cut the latency roughly in half. The first click is noticeably snappier.
 
 The XMLUI inspector shows handler-level timing (how long `onDidChange` or `onClick` handlers take), but treats each handler as a single block. If a handler triggers reactive re-evaluation that calls multiple expensive functions, the inspector can't tell you which one is slow.
 
