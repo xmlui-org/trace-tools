@@ -18,6 +18,7 @@
 - [Known limitations](#known-limitations)
 - [Opt-in app-level timing with xsTrace](#opt-in-app-level-timing-with-xstrace)
 - [Auto-update baselines on pass](#auto-update-baselines-on-pass)
+- [Opt-in chaos](#opt-in-chaos)
 - [Synthetic baselines](#synthetic-baselines)
 
 ## Overview
@@ -130,7 +131,7 @@ Open the XMLUI inspector in the running app and perform the user journey you wan
 
 - **Start from the app's root URL.** The generated test always begins at the app's root (e.g. `http://localhost:8123/ui/`). If your journey happens on a subpage like `/users`, include the navigation click (e.g. clicking "USERS" in the sidebar) as part of the trace. If you navigate to the subpage first and then start capturing, the test won't know how to get there.
 - **Design roundtrip journeys.** A trace that creates a user should also delete it, so the system ends in the same state it started. Enable/disable is naturally a roundtrip. Create/delete should be captured as one journey: create a test user, then delete it. This ensures the test is repeatable — running it twice produces the same result.
-- **Don't worry about being clean.** Extra clicks, hesitations, and accidental interactions are fine. The initial capture just needs to be functionally correct — hitting the right APIs, submitting the right forms, navigating the right pages. On the first passing replay, auto-update replaces the messy human capture with a clean Playwright capture (see [Opt-in chaos](#opt-in-chaos) under Auto-update).
+- **Don't worry about being clean.** Extra clicks, hesitations, and accidental interactions are fine. The initial capture just needs to be functionally correct — hitting the right APIs, submitting the right forms, navigating the right pages. On the first passing replay, auto-update replaces the messy human capture with a clean Playwright capture (see [Opt-in chaos](#opt-in-chaos)).
 - **Startup noise doesn't matter.** The trace will include initial data fetches and page render events from app startup. The distiller ignores these and only extracts interaction steps (clicks, form submits, API calls triggered by user actions). You can use the inspector's Clear button before starting your journey if you like, but it's not necessary.
 - **One journey per trace.** Keep each trace focused on a single user journey. This makes baselines easy to name, understand, and debug when a test fails.
 
@@ -701,7 +702,17 @@ The `.prev.json` preserves the prior version. For the first auto-update, that's 
 node trace-tools/compare-traces.js --semantic traces/baselines/rename-file-roundtrip.prev.json traces/baselines/rename-file-roundtrip.json
 ```
 
-### Opt-in chaos
+### Implementation notes
+
+Auto-update required three fixes to make captures round-trip as baselines:
+
+1. **ARIA enrichment in `_xsLogs`** (`AppContent.tsx`). Promoted `ariaRole` and `ariaName` to top-level fields in interaction events so the distiller extracts the same steps from captures as from inspector exports. For table rows, falls back to first `<td>` cell text since rows can be clicked anywhere.
+
+2. **Row locators using `.filter()`** (`generate-playwright.js`). A row's accessible name is all cells concatenated, so `exact: true` never matches and substring matching is ambiguous. Row selectors use `page.getByRole('row').filter({ has: page.getByRole('cell', { name, exact: true }) })` instead.
+
+3. **FormData fill fallback** (`generate-playwright.js`). Playwright's `.fill()` doesn't fire `keydown` events in `_xsLogs`, so captures lack textbox interactions. On submit, any formData fields not covered by textbox interactions get `fill()` calls generated from the field values.
+
+## Opt-in chaos
 
 Baselines can come from two sources: clean Playwright captures (synthetic) or messy human captures (chaotic). By default we use synthetic baselines for convenience — they're deterministic and easy to generate. But human captures introduce real-world noise: hesitations, extra clicks, stop-and-start behavior, background events that fire during pauses. This chaos is sometimes good — it exercises code paths that clean replays never hit — and sometimes bad — there's nothing to learn from a stray click.
 
@@ -712,16 +723,6 @@ To switch from synthetic to chaotic, capture a baseline manually in the inspecto
 ```
 
 On the first passing replay, auto-update replaces the chaotic baseline with a clean one, but the `.prev.json` preserves the original. If it reveals something interesting — an API call that only fires during slow human interaction, a modal that only appears when you pause between steps — that's a signal worth investigating. The chaos found it; the clean baseline wouldn't have.
-
-### Implementation notes
-
-Auto-update required three fixes to make captures round-trip as baselines:
-
-1. **ARIA enrichment in `_xsLogs`** (`AppContent.tsx`). Promoted `ariaRole` and `ariaName` to top-level fields in interaction events so the distiller extracts the same steps from captures as from inspector exports. For table rows, falls back to first `<td>` cell text since rows can be clicked anywhere.
-
-2. **Row locators using `.filter()`** (`generate-playwright.js`). A row's accessible name is all cells concatenated, so `exact: true` never matches and substring matching is ambiguous. Row selectors use `page.getByRole('row').filter({ has: page.getByRole('cell', { name, exact: true }) })` instead.
-
-3. **FormData fill fallback** (`generate-playwright.js`). Playwright's `.fill()` doesn't fire `keydown` events in `_xsLogs`, so captures lack textbox interactions. On submit, any formData fields not covered by textbox interactions get `fill()` calls generated from the field values.
 
 ## Synthetic baselines
 
