@@ -22,7 +22,7 @@ The two app types differ in how they're served, whether they require auth, and h
 |---|---|---|
 | How it runs | Static files served by an external process | `npm run dev` (Vite dev server) |
 | Base URL | `http://localhost:8123/ui/` (path prefix) | `http://localhost:5173` (root) |
-| XMLUI runtime | Checked-in JS bundle (`xmlui/0.12.0.js`) | Installed via npm, built by Vite |
+| XMLUI runtime | Checked-in JS bundle (e.g. `xmlui/0.12.1.js`) | Installed via npm, built by Vite |
 
 Either type may require auth. If it does, `app-config.json` describes the login flow (see [Auth configuration](#auth-configuration)). If not, omit the file. Auth is independent of how the app is served.
 
