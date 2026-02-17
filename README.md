@@ -4,6 +4,7 @@
 
 - [Overview](#overview)
 - [Setup](#setup)
+- [Server state: the file tree your tests need](#server-state-the-file-tree-your-tests-need)
 - [Capturing a trace](#capturing-a-trace)
 - [Walkthrough: capturing and testing user journeys](#walkthrough-capturing-and-testing-user-journeys)
 - [Commands](#commands)
@@ -45,10 +46,41 @@ npx playwright install chromium
 cd ..
 ```
 
+**Important:** Before running tests, set up the server's file tree from the app's fixtures. See [Server state](#server-state-the-file-tree-your-tests-need) below.
+
 Make sure the app is running before running tests:
 
 - **Standalone apps**: start the app server (e.g. for core-ssh-server-ui, the app serves at `http://localhost:8123/ui/`)
 - **Dev-environment apps**: run `npm run dev` (serves at `http://localhost:5173` by default)
+
+## Server state: the file tree your tests need
+
+Tests replay user journeys against a live app. If your app works with files (like a file manager), the tests expect specific files and folders to exist. A test that right-clicks `test.xlsx` will fail if `test.xlsx` isn't there.
+
+Each app checks in a `traces/fixtures/` directory with the exact file tree needed by its baselines. **Before running tests, copy this fixture into place:**
+
+```bash
+# Example for myWorkDrive-Client (mock server reads from ~/mwd/shares/)
+rm -rf ~/mwd/shares/Documents
+cp -r traces/fixtures/shares/Documents ~/mwd/shares/Documents
+```
+
+The fixture for myWorkDrive-Client looks like this:
+
+```
+traces/fixtures/shares/Documents/
+  test.xlsx                          # Used by copy-paste, cut-paste, and conflict tests
+  xs-diff-20260127T035521.html       # Used by rename test
+  foo/                               # Target folder for paste and navigation tests
+    .gitkeep
+    hello.txt                        # File inside foo (verifies folder contents)
+    bar/                             # Nested folder for breadcrumb navigation
+      .gitkeep
+```
+
+If a test fails with a selector timeout on the very first step (e.g. waiting for a row that should contain `test.xlsx`), the fixture is probably not in place.
+
+See [Fixtures: deterministic server state](#fixtures-deterministic-server-state) for details on why roundtrip journeys matter and how to reset after a flaky run.
 
 ## Capturing a trace
 
