@@ -34,10 +34,15 @@ function generatePlaywright(distilled, options = {}) {
   const firstInteraction = otherSteps[0];
   const startingPage = firstInteraction?.await?.navigate?.from;
 
+  let responsePromiseCounter = 0;
   for (let si = 0; si < orderedSteps.length; si++) {
     const step = orderedSteps[si];
     lines.push('');
-    lines.push(...generateStepCode(step, fillPlan));
+    lines.push(...generateStepCode(step, fillPlan, responsePromiseCounter));
+    // Increment counter if this step used a response promise
+    if (step.action !== 'startup' && step.await?.api?.length > 0) {
+      responsePromiseCounter++;
+    }
 
     // After a step that awaits a mutating API response (POST/PUT/DELETE),
     // the DOM may not have re-rendered yet. Peek at the next step's target
@@ -82,7 +87,12 @@ function generatePlaywright(distilled, options = {}) {
     // XMLUI apps use client-side routing, so page.goto() won't work —
     // click the nav label instead (path /users → click "USERS"), then
     // wait for the first interaction target to confirm the page rendered.
-    if (step.action === 'startup' && startingPage && startingPage !== '/') {
+    // Skip navigation for root ('/') and single-segment default routes like '/my-files'
+    // which are where the app lands after goto('./').  Only navigate for deeper paths
+    // like '/users/settings' that require clicking through the app's navigation.
+    const needsNavigation = startingPage && startingPage !== '/' &&
+      startingPage.replace(/^\//, '').includes('/');
+    if (step.action === 'startup' && needsNavigation) {
       const navLabel = startingPage.replace(/^\//, '').toUpperCase();
       lines.push('');
       lines.push(`  // Navigate to starting page (trace was captured on ${startingPage})`);
@@ -365,12 +375,23 @@ function rowLocator(ariaName) {
   return `page.getByRole('row').filter({ has: page.getByRole('cell', { name: '${escaped}', exact: true }) })`;
 }
 
-function generateStepCode(step, fillPlan) {
+function generateStepCode(step, fillPlan, promiseCounter = 0) {
   const lines = [];
   const indent = '  ';
 
   // Comment describing the step
   lines.push(`${indent}// ${step.action}: ${step.target?.label || step.target?.component || 'startup'}`);
+
+  // For non-startup steps with API awaits, set up the response promise BEFORE
+  // the action to avoid race conditions (response arriving before waitForResponse).
+  const apiAwait = (step.action !== 'startup' && step.await?.api?.length > 0)
+    ? step.await.api.find(a => a.method === 'GET' || a.method === 'POST') || step.await.api[0]
+    : null;
+  const promiseVar = `responsePromise${promiseCounter}`;
+  if (apiAwait) {
+    const path = extractEndpointPath(apiAwait.endpoint || apiAwait);
+    lines.push(`${indent}const ${promiseVar} = page.waitForResponse(r => r.url().includes('${path}'));`);
+  }
 
   switch (step.action) {
     case 'startup':
@@ -431,9 +452,14 @@ function generateStepCode(step, fillPlan) {
       lines.push(`${indent}// TODO: handle action "${step.action}"`);
   }
 
-  // Add await conditions (skip for startup - already handled inline)
+  // Await the response promise set up before the action
+  if (apiAwait) {
+    lines.push(`${indent}await ${promiseVar};`);
+  }
+
+  // Add navigation await conditions (skip for startup - already handled inline)
   if (step.await && step.action !== 'startup') {
-    lines.push(...generateAwaitCode(step.await, indent));
+    lines.push(...generateNavigateAwaitCode(step.await, indent));
   }
 
   return lines;
@@ -538,10 +564,10 @@ function generateContextMenuCode(step, indent) {
   return lines;
 }
 
-function generateAwaitCode(awaitConditions, indent) {
+function generateNavigateAwaitCode(awaitConditions, indent) {
   const lines = [];
 
-  // Wait for navigation
+  // Wait for navigation (polls automatically, safe to place after action)
   if (awaitConditions.navigate) {
     const to = awaitConditions.navigate.to;
     // Extract meaningful part of URL for matching
@@ -549,15 +575,6 @@ function generateAwaitCode(awaitConditions, indent) {
     if (folderMatch) {
       const folder = decodeURIComponent(folderMatch[1]);
       lines.push(`${indent}await page.waitForURL('**/*folder=${encodeURIComponent(folder)}*');`);
-    }
-  }
-
-  // Wait for API calls (just the first significant one to avoid over-waiting)
-  if (awaitConditions.api?.length > 0) {
-    const api = awaitConditions.api.find(a => a.method === 'GET' || a.method === 'POST') || awaitConditions.api[0];
-    if (api) {
-      const path = extractEndpointPath(api.endpoint || api);
-      lines.push(`${indent}await page.waitForResponse(r => r.url().includes('${path}'));`);
     }
   }
 
