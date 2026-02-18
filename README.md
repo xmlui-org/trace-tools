@@ -1,8 +1,9 @@
-# Regression Testing with Trace Tools
+# Trace Tools: Observability and Regression Testing for XMLUI Apps
 
 ## Table of Contents
 
 - [Overview](#overview)
+- [The XMLUI inspector and xs-diff.html](#the-xmlui-inspector-and-xs-diffhtml)
 - [Setup](#setup)
 - [Server state: the file tree your tests need](#server-state-the-file-tree-your-tests-need)
 - [Capturing a trace](#capturing-a-trace)
@@ -24,7 +25,36 @@
 
 ## Overview
 
-XMLUI apps use [trace-tools](https://github.com/xmlui-org/trace-tools) to auto-generate Playwright regression tests from XMLUI inspector traces. The workflow:
+The XMLUI engine can optionally instrument any running app with detailed traces of interactions, API calls, state changes, and component rendering. Trace-tools makes this observability useful in two ways:
+
+**For humans:** The `xs-diff.html` viewer presents traces as a navigable timeline — click an interaction to see its API calls, state changes, handlers, and timing, with user journeys threaded from a user interaction (e.g. a button click) through to final settling of the UI. HTTP requests are correlated with their responses, and links into the relevant XMLUI sources connect runtime behavior to the code that produced it.
+
+**For AIs:** The same traces are available as raw text and JSON — a structured record of every user journey that AI tools can read, diff, and reason about without needing to parse DOM or screenshots.
+
+This observability is valuable on its own. You can drop `xs-diff.html` into any XMLUI app and immediately see how interactions flow through the engine, which APIs fire, what ARIA roles are present (or missing), how state changes, and where time is spent.
+
+**Regression testing** builds on this foundation. Since traces capture the semantic behavior of a user journey — which APIs were called, what forms were submitted, what pages were navigated — you can replay a journey, capture a new trace, and compare the two. If the same APIs fire in the same order with the same mutations, the app's behavior is unchanged regardless of how the internals were refactored.
+
+**ARIA improvements** close the loop. The regression test generator produces Playwright selectors from ARIA roles and accessible names. When elements lack proper ARIA semantics, the generator flags them as accessibility gaps — the same gaps a screen reader user would encounter. Fixing these gaps improves accessibility *and* makes the tests more robust, which in turn makes the traces more informative.
+
+## The XMLUI inspector and xs-diff.html
+
+Every XMLUI app exposes `window._xsLogs` (interaction traces) and `window._xsSourceFiles` (component source). The `xs-diff.html` viewer reads these and presents:
+
+- **Pretty view** — a timeline of interactions, expandable to show API calls, state changes, handler timing, and ARIA metadata. Useful for debugging, performance analysis, and understanding how a journey flows through the engine.
+- **Raw view** — the full JSON trace, exportable for offline analysis or AI consumption. This is the same format used by the regression test pipeline.
+
+To add the inspector to any XMLUI app:
+
+```bash
+cp trace-tools/xs-diff.html public/xs-diff.html
+```
+
+Then navigate to `/xs-diff.html` in the running app.
+
+## Regression testing
+
+The regression testing workflow uses traces as its foundation:
 
 1. Perform a user journey in the running app
 2. Export a trace from the XMLUI inspector (Export → Download JSON)
