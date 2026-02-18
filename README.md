@@ -36,6 +36,18 @@ The XMLUI engine can optionally instrument any running app with detailed traces 
 
 `xsVerbose` turns on the engine-level tracing; `xsVerboseLogMax` caps the number of retained log entries. Without `xsVerbose: true`, there is nothing for trace-tools to capture.
 
+To add an in-app icon that opens the inspector in a modal:
+
+```xml
+<Icon name="cog" tooltip="Inspector" width="20px" height="20px"
+      onClick="inspectorDialog.open()" />
+
+<ModalDialog id="inspectorDialog" title="XMLUI Inspector"
+             minWidth="85vw" minHeight="85vh">
+  <IFrame src="xs-diff.html" width="100%" height="80vh"/>
+</ModalDialog>
+```
+
 Trace-tools makes this observability useful in two ways:
 
 **For humans:** The `xs-diff.html` viewer presents traces as a navigable timeline — click an interaction to see its API calls, state changes, handlers, and timing, with user journeys threaded from a user interaction (e.g. a button click) through to final settling of the UI. HTTP requests are correlated with their responses, and links into the relevant XMLUI sources connect runtime behavior to the code that produced it.
