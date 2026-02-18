@@ -42,7 +42,7 @@ Trace-tools makes this observability useful in two ways:
 
 **For AIs:** The same traces are available as raw text and JSON — a structured record of every user journey that AI tools can read, diff, and reason about without needing to parse DOM or screenshots.
 
-This observability is valuable on its own. You can drop `xs-diff.html` into any XMLUI app and immediately see how interactions flow through the engine, which APIs fire, what ARIA roles are present (or missing), how state changes, and where time is spent.
+This observability is valuable on its own. You can drop `xs-diff.html` into any XMLUI app and immediately see how interactions flow through the engine, which APIs fire, how state changes, and where time is spent. Share traces with agents to turbocharge analysis and debugging.
 
 **Regression testing** builds on this foundation. Since traces capture the semantic behavior of a user journey — which APIs were called, what forms were submitted, what pages were navigated — you can replay a journey, capture a new trace, and compare the two. If the same APIs fire in the same order with the same mutations, the app's behavior is unchanged regardless of how the internals were refactored.
 
