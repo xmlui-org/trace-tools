@@ -44,6 +44,8 @@ cd trace-tools
 npm install
 npx playwright install chromium
 cd ..
+cp trace-tools/example-test.sh test.sh
+mkdir -p traces/baselines traces/captures
 ```
 
 **Important:** Before running tests, set up the server's file tree from the app's fixtures. See [Server state](#server-state-the-file-tree-your-tests-need) below.
