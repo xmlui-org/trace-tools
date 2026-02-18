@@ -25,7 +25,18 @@
 
 ## Overview
 
-The XMLUI engine can optionally instrument any running app with detailed traces of interactions, API calls, state changes, and component rendering. Trace-tools makes this observability useful in two ways:
+The XMLUI engine can optionally instrument any running app with detailed traces of interactions, API calls, state changes, and component rendering. To enable tracing, set `xsVerbose` in the app's `config.json`:
+
+```json
+"appGlobals": {
+    "xsVerbose": true,
+    "xsVerboseLogMax": 200
+}
+```
+
+`xsVerbose` turns on the engine-level tracing; `xsVerboseLogMax` caps the number of retained log entries. Without `xsVerbose: true`, there is nothing for trace-tools to capture.
+
+Trace-tools makes this observability useful in two ways:
 
 **For humans:** The `xs-diff.html` viewer presents traces as a navigable timeline — click an interaction to see its API calls, state changes, handlers, and timing, with user journeys threaded from a user interaction (e.g. a button click) through to final settling of the UI. HTTP requests are correlated with their responses, and links into the relevant XMLUI sources connect runtime behavior to the code that produced it.
 
