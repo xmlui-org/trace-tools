@@ -511,6 +511,12 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
   if (ariaRole && ariaName) {
     if (ariaRole === 'row') {
       lines.push(`${indent}await ${rowLocator(ariaName)}.${method}();`);
+    } else if (ariaRole === 'treeitem' && (targetTag === 'svg' || targetTag === 'polyline')) {
+      // XMLUI TreeView: click was on the toggle arrow (expand/collapse), not the label.
+      // This is a purely visual action — no API call or URL navigation.
+      lines.push(`${indent}await page.getByRole('treeitem', { name: '${ariaName}', exact: true }).locator('[class*="toggleWrapper"]').${method}();`);
+      lines.push(`${indent}await page.waitForTimeout(300);`);
+      lines._skipAwait = true;
     } else {
       lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}', exact: true }).${method}();`);
     }
@@ -550,6 +556,13 @@ function generateContextMenuCode(step, indent) {
   if (ariaRole && ariaName) {
     if (ariaRole === 'row') {
       lines.push(`${indent}await ${rowLocator(ariaName)}.click({ button: 'right' });`);
+    } else if (ariaRole === 'treeitem') {
+      // XMLUI TreeView: right-clicking a treeitem also triggers navigation
+      // (the tree's contextMenu handler fires after a delay). We must wait
+      // for the ListFolder response before interacting with the context menu.
+      lines.push(`${indent}const _treeCtxNav = page.waitForResponse(r => r.url().includes('ListFolder'));`);
+      lines.push(`${indent}await page.getByRole('treeitem', { name: '${ariaName}', exact: true }).click({ button: 'right' });`);
+      lines.push(`${indent}await _treeCtxNav;`);
     } else {
       lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}', exact: true }).click({ button: 'right' });`);
     }
