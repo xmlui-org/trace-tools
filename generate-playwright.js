@@ -72,6 +72,10 @@ function generatePlaywright(distilled, options = {}) {
         if (nt?.ariaRole && nt?.ariaName) {
           if (nt.ariaRole === 'row') {
             lines.push(`  await ${rowLocator(nt.ariaName)}.waitFor();`);
+          } else if (nt.ariaRole === 'button') {
+            // Buttons may be disabled during state transitions (e.g. server restart);
+            // wait for them to be enabled, not just present in the DOM.
+            lines.push(`  await expect(page.getByRole('button', { name: '${nt.ariaName}', exact: true })).toBeEnabled({ timeout: 15000 });`);
           } else {
             lines.push(`  await page.getByRole('${nt.ariaRole}', { name: '${nt.ariaName}', exact: true }).waitFor();`);
           }
@@ -426,6 +430,8 @@ function generateStepCode(step, fillPlan, promiseCounter = 0) {
   // the action to avoid race conditions (response arriving before waitForResponse).
   // Deduplicate by endpoint path so we don't wait for the same URL twice.
   // Skip for treeitem contextmenu — generateContextMenuCode already awaits ListFolder.
+  // For mutating methods (POST/PUT/DELETE/PATCH), include method in the filter
+  // to avoid catching polling GET responses that share the same URL path.
   const isTreeContextMenu = step.action === 'contextmenu' && step.target?.ariaRole === 'treeitem';
   const apiAwaits = [];
   if (step.action !== 'startup' && step.await?.api?.length > 0 && !isTreeContextMenu) {
@@ -434,11 +440,16 @@ function generateStepCode(step, fillPlan, promiseCounter = 0) {
       const path = extractEndpointPath(api.endpoint || api);
       if (path && !seenPaths.has(path)) {
         seenPaths.add(path);
-        apiAwaits.push({ path, varName: `responsePromise${promiseCounter}_${apiAwaits.length}` });
+        apiAwaits.push({ path, method: api.method, varName: `responsePromise${promiseCounter}_${apiAwaits.length}` });
       }
     }
-    for (const { path, varName } of apiAwaits) {
-      lines.push(`${indent}const ${varName} = page.waitForResponse(r => r.url().includes('${path}'));`);
+    for (const { path, varName, method } of apiAwaits) {
+      const isMutating = method && ['POST', 'PUT', 'DELETE', 'PATCH'].includes(method);
+      if (isMutating) {
+        lines.push(`${indent}const ${varName} = page.waitForResponse(r => r.url().includes('${path}') && r.request().method() === '${method}');`);
+      } else {
+        lines.push(`${indent}const ${varName} = page.waitForResponse(r => r.url().includes('${path}'));`);
+      }
     }
   }
 
@@ -560,6 +571,33 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
     const rowName = ariaName.replace('Select ', '');
     lines.push(`${indent}await ${rowLocator(rowName)}.hover();`);
     lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}', exact: true })${methodCall};`);
+    return lines;
+  }
+
+  // Checkboxes in forms: wait briefly for data sources to finish populating the
+  // form before interacting, to avoid the checkbox state being overwritten after
+  // clicking. Then scroll into view since they may be deep in a long page.
+  if (ariaRole === 'checkbox' && ariaName && !ariaName.startsWith('Select ')) {
+    lines.push(`${indent}await page.waitForTimeout(1000);`);
+    lines.push(`${indent}{ const el = page.getByRole('checkbox', { name: '${ariaName}', exact: true });`);
+    lines.push(`${indent}  await el.scrollIntoViewIfNeeded();`);
+    lines.push(`${indent}  await el.${method}(); }`);
+    return lines;
+  }
+
+  // Buttons: scroll the button's nearest scrollable ancestor to the top so
+  // sticky submit buttons drop out of sticky position and clear any fixed
+  // app header that overlaps them.
+  if (ariaRole === 'button' && ariaName) {
+    lines.push(`${indent}await page.getByRole('button', { name: '${ariaName}', exact: true }).evaluate(node => {`);
+    lines.push(`${indent}  let el = node.parentElement;`);
+    lines.push(`${indent}  while (el && el !== document.documentElement) {`);
+    lines.push(`${indent}    if (el.scrollHeight > el.clientHeight) { el.scrollTop = 0; break; }`);
+    lines.push(`${indent}    el = el.parentElement;`);
+    lines.push(`${indent}  }`);
+    lines.push(`${indent}  window.scrollTo(0, 0);`);
+    lines.push(`${indent}});`);
+    lines.push(`${indent}await page.getByRole('button', { name: '${ariaName}', exact: true }).${method}();`);
     return lines;
   }
 
