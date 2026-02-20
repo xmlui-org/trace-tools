@@ -39,9 +39,14 @@ function generatePlaywright(distilled, options = {}) {
     const step = orderedSteps[si];
     lines.push('');
     lines.push(...generateStepCode(step, fillPlan, responsePromiseCounter));
-    // Increment counter if this step used a response promise
+    // Increment counter by the number of deduplicated API promises used
     if (step.action !== 'startup' && step.await?.api?.length > 0) {
-      responsePromiseCounter++;
+      const seenPaths = new Set();
+      for (const api of step.await.api) {
+        const p = extractEndpointPath(api.endpoint || api);
+        if (p) seenPaths.add(p);
+      }
+      responsePromiseCounter += Math.max(1, seenPaths.size);
     }
 
     // After a step that awaits a mutating API response (POST/PUT/DELETE),
@@ -385,6 +390,30 @@ function rowLocator(ariaName) {
   return `page.getByRole('row').filter({ has: page.getByRole('cell', { name: '${escaped}', exact: true }) })`;
 }
 
+/**
+ * Build Playwright click options string from step target modifiers and extra options.
+ * Returns '' for a plain click, or '{ modifiers: [...] }' / '{ button: "right", modifiers: [...] }' etc.
+ */
+function clickOptions(target, extra = {}) {
+  const modifiers = [];
+  if (target?.ctrlKey) modifiers.push("'Control'");
+  if (target?.shiftKey) modifiers.push("'Shift'");
+  if (target?.metaKey) modifiers.push("'Meta'");
+
+  const opts = { ...extra };
+  if (modifiers.length > 0) opts.modifiers = modifiers;
+
+  const entries = Object.entries(opts);
+  if (entries.length === 0) return '';
+
+  const parts = entries.map(([k, v]) => {
+    if (k === 'modifiers') return `modifiers: [${v.join(', ')}]`;
+    if (typeof v === 'string') return `${k}: '${v}'`;
+    return `${k}: ${v}`;
+  });
+  return `{ ${parts.join(', ')} }`;
+}
+
 function generateStepCode(step, fillPlan, promiseCounter = 0) {
   const lines = [];
   const indent = '  ';
@@ -392,15 +421,24 @@ function generateStepCode(step, fillPlan, promiseCounter = 0) {
   // Comment describing the step
   lines.push(`${indent}// ${step.action}: ${step.target?.label || step.target?.component || 'startup'}`);
 
-  // For non-startup steps with API awaits, set up the response promise BEFORE
+  // For non-startup steps with API awaits, set up response promises BEFORE
   // the action to avoid race conditions (response arriving before waitForResponse).
-  const apiAwait = (step.action !== 'startup' && step.await?.api?.length > 0)
-    ? step.await.api.find(a => a.method === 'GET' || a.method === 'POST') || step.await.api[0]
-    : null;
-  const promiseVar = `responsePromise${promiseCounter}`;
-  if (apiAwait) {
-    const path = extractEndpointPath(apiAwait.endpoint || apiAwait);
-    lines.push(`${indent}const ${promiseVar} = page.waitForResponse(r => r.url().includes('${path}'));`);
+  // Deduplicate by endpoint path so we don't wait for the same URL twice.
+  // Skip for treeitem contextmenu — generateContextMenuCode already awaits ListFolder.
+  const isTreeContextMenu = step.action === 'contextmenu' && step.target?.ariaRole === 'treeitem';
+  const apiAwaits = [];
+  if (step.action !== 'startup' && step.await?.api?.length > 0 && !isTreeContextMenu) {
+    const seenPaths = new Set();
+    for (const api of step.await.api) {
+      const path = extractEndpointPath(api.endpoint || api);
+      if (path && !seenPaths.has(path)) {
+        seenPaths.add(path);
+        apiAwaits.push({ path, varName: `responsePromise${promiseCounter}_${apiAwaits.length}` });
+      }
+    }
+    for (const { path, varName } of apiAwaits) {
+      lines.push(`${indent}const ${varName} = page.waitForResponse(r => r.url().includes('${path}'));`);
+    }
   }
 
   switch (step.action) {
@@ -464,26 +502,14 @@ function generateStepCode(step, fillPlan, promiseCounter = 0) {
 
   // Handle confirmation dialogs that appear during this step
   if (step.modals?.length > 0) {
-    for (const modal of step.modals) {
-      lines.push('');
-      lines.push(`${indent}// Confirmation dialog: "${modal.title || 'confirm'}"`);
-      if (modal.action === 'confirm' && modal.buttonLabel) {
-        lines.push(`${indent}await page.getByRole('dialog').last().getByRole('button', { name: '${modal.buttonLabel}', exact: true }).click();`);
-      } else if (modal.action === 'cancel') {
-        lines.push(`${indent}await page.getByRole('dialog').last().getByRole('button', { name: 'Cancel', exact: true }).click();`);
-      } else if (modal.action === 'confirm' && modal.buttons?.length > 0) {
-        // Fallback: use the last button (action button) from the buttons array
-        const actionBtn = modal.buttons[modal.buttons.length - 1];
-        lines.push(`${indent}await page.getByRole('dialog').last().getByRole('button', { name: '${actionBtn.label}', exact: true }).click();`);
-      } else {
-        lines.push(`${indent}// TODO: resolve confirmation dialog (value=${JSON.stringify(modal.value)})`);
-      }
-    }
+    lines.push(...generateModalCode(step.modals, indent));
   }
 
-  // Await the response promise set up before the action
-  if (apiAwait) {
-    lines.push(`${indent}await ${promiseVar};`);
+  // Await all response promises set up before the action
+  if (apiAwaits.length === 1) {
+    lines.push(`${indent}await ${apiAwaits[0].varName};`);
+  } else if (apiAwaits.length > 1) {
+    lines.push(`${indent}await Promise.all([${apiAwaits.map(a => a.varName).join(', ')}]);`);
   }
 
   // Add navigation await conditions (skip for startup - already handled inline)
@@ -501,6 +527,9 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
   const ariaName = step.target?.ariaName;
   const targetTag = step.target?.targetTag;
   const formData = step.target?.formData;
+  const opts = clickOptions(step.target);
+  const callSuffix = opts ? `(${opts})` : '()';
+  const methodCall = `.${method}${callSuffix}`;
 
   // Textbox click with ariaName: generate fill() if we matched a formData field
   if (ariaRole === 'textbox' && ariaName && fillPlan.fills?.has(ariaName)) {
@@ -529,7 +558,7 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
   if (ariaRole === 'checkbox' && ariaName?.startsWith('Select ')) {
     const rowName = ariaName.replace('Select ', '');
     lines.push(`${indent}await ${rowLocator(rowName)}.hover();`);
-    lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}', exact: true }).${method}();`);
+    lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}', exact: true })${methodCall};`);
     return lines;
   }
 
@@ -539,15 +568,17 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
   // the filename. A cell's accessible name IS its text, so exact matching works.
   if (ariaRole && ariaName) {
     if (ariaRole === 'row') {
-      lines.push(`${indent}await ${rowLocator(ariaName)}.${method}();`);
-    } else if (ariaRole === 'treeitem' && (targetTag === 'svg' || targetTag === 'polyline')) {
+      lines.push(`${indent}await ${rowLocator(ariaName)}${methodCall};`);
+    } else if (ariaRole === 'treeitem' &&
+               ((targetTag === 'svg' || targetTag === 'polyline') ||
+                ((targetTag === 'DIV' || targetTag === 'SPAN') && !step.await?.api?.length))) {
       // XMLUI TreeView: click was on the toggle arrow (expand/collapse), not the label.
-      // This is a purely visual action — no API call or URL navigation.
-      lines.push(`${indent}await page.getByRole('treeitem', { name: '${ariaName}', exact: true }).locator('[class*="toggleWrapper"]').${method}();`);
+      // Detected by SVG/polyline targetTag, or DIV/SPAN with no API calls (pure visual toggle).
+      lines.push(`${indent}await page.getByRole('treeitem', { name: '${ariaName}', exact: true }).locator('[class*="toggleWrapper"]')${methodCall};`);
       lines.push(`${indent}await page.waitForTimeout(300);`);
       lines._skipAwait = true;
     } else {
-      lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}', exact: true }).${method}();`);
+      lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}', exact: true })${methodCall};`);
     }
     return lines;
   }
@@ -555,13 +586,13 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
   // ARIA role without name — accessibility gap, but still usable if unique
   if (ariaRole && !ariaName) {
     lines.push(`${indent}// ACCESSIBILITY GAP: ${ariaRole} has no accessible name`);
-    lines.push(`${indent}await page.getByRole('${ariaRole}').${method}();`);
+    lines.push(`${indent}await page.getByRole('${ariaRole}')${methodCall};`);
     return lines;
   }
 
   // Fallback: use label with getByText (exact match to avoid ambiguity)
   if (label) {
-    lines.push(`${indent}await page.getByText('${label}', { exact: true }).${method}();`);
+    lines.push(`${indent}await page.getByText('${label}', { exact: true })${methodCall};`);
     return lines;
   }
 
@@ -575,26 +606,121 @@ function generateContextMenuCode(step, indent) {
   const ariaRole = step.target?.ariaRole;
   const ariaName = step.target?.ariaName;
   const label = step.target?.label;
+  const opts = clickOptions(step.target, { button: 'right' });
 
   if (ariaRole && ariaName) {
     if (ariaRole === 'row') {
-      lines.push(`${indent}await ${rowLocator(ariaName)}.click({ button: 'right' });`);
+      lines.push(`${indent}await ${rowLocator(ariaName)}.click(${opts});`);
     } else if (ariaRole === 'treeitem') {
       // XMLUI TreeView: right-clicking a treeitem also triggers navigation
       // (the tree's contextMenu handler fires after a delay). We must wait
       // for the ListFolder response before interacting with the context menu.
       lines.push(`${indent}const _treeCtxNav = page.waitForResponse(r => r.url().includes('ListFolder'));`);
-      lines.push(`${indent}await page.getByRole('treeitem', { name: '${ariaName}', exact: true }).click({ button: 'right' });`);
+      lines.push(`${indent}await page.getByRole('treeitem', { name: '${ariaName}', exact: true }).click(${opts});`);
       lines.push(`${indent}await _treeCtxNav;`);
     } else {
-      lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}', exact: true }).click({ button: 'right' });`);
+      lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}', exact: true }).click(${opts});`);
     }
   } else if (label) {
-    lines.push(`${indent}await page.getByText('${label}', { exact: true }).click({ button: 'right' });`);
+    lines.push(`${indent}await page.getByText('${label}', { exact: true }).click(${opts});`);
   } else {
     lines.push(`${indent}// ACCESSIBILITY GAP: ${step.target?.testId || 'element'} has no role or accessible name (context menu)`);
   }
 
+  return lines;
+}
+
+/**
+ * Generate code for confirmation dialogs that appear during a step.
+ *
+ * Simple case: each modal has a unique title → emit sequential clicks.
+ * Complex case: multiple modals share a title but get different actions
+ * (e.g. two "Conflict" dialogs where one is closed and the other confirmed).
+ * In that case, emit a loop that reads dialog text at runtime to decide,
+ * since queue processing order may vary between runs.
+ */
+function generateModalCode(modals, indent) {
+  const lines = [];
+
+  // Group modals by title to detect the "same title, different action" pattern
+  const byTitle = new Map();
+  for (const m of modals) {
+    const t = m.title || 'confirm';
+    if (!byTitle.has(t)) byTitle.set(t, []);
+    byTitle.get(t).push(m);
+  }
+
+  // Check if any title group has mixed actions (confirm vs cancel)
+  const hasMixedGroup = [...byTitle.values()].some(group =>
+    group.length > 1 && new Set(group.map(m => m.action)).size > 1
+  );
+
+  if (hasMixedGroup) {
+    // Emit a runtime-branching loop for the mixed groups
+    for (const [title, group] of byTitle) {
+      if (group.length > 1 && new Set(group.map(m => m.action)).size > 1) {
+        // Count how many of each action
+        const confirms = group.filter(m => m.action === 'confirm');
+        const cancels = group.filter(m => m.action === 'cancel');
+        lines.push('');
+        lines.push(`${indent}// Handle ${group.length} "${title}" dialogs (order may vary at runtime)`);
+        lines.push(`${indent}for (let _dlg = 0; _dlg < ${group.length}; _dlg++) {`);
+        // Wait for the dialog's action button to appear
+        const waitButton = confirms[0]?.buttonLabel || confirms[0]?.buttons?.[0]?.label || 'OK';
+        lines.push(`${indent}  await page.getByRole('button', { name: '${waitButton}', exact: true }).waitFor({ timeout: 10000 });`);
+        lines.push(`${indent}  const _dialogText = await page.locator('[role="dialog"]').last().innerText();`);
+
+        // Generate branches for each distinct action
+        // Use the confirm branch as the "if" and cancel as "else"
+        if (confirms.length > 0 && cancels.length > 0) {
+          // Determine a text hint to distinguish — use "File" vs "Folder" as common pattern
+          lines.push(`${indent}  if (_dialogText.includes('File')) {`);
+          if (cancels[0].action === 'cancel') {
+            lines.push(`${indent}    // File conflict — skip`);
+            lines.push(`${indent}    await page.locator('[role="dialog"]').last().locator('button[aria-label="Close"]').click();`);
+          } else {
+            const btn = cancels[0].buttonLabel || 'Cancel';
+            lines.push(`${indent}    await page.getByRole('dialog').last().getByRole('button', { name: '${btn}', exact: true }).click();`);
+          }
+          lines.push(`${indent}  } else {`);
+          const confirmBtn = confirms[0].buttonLabel || confirms[0].buttons?.[confirms.length - 1]?.label || 'OK';
+          lines.push(`${indent}    // Folder conflict — ${confirmBtn}`);
+          lines.push(`${indent}    await page.getByRole('dialog').last().getByRole('button', { name: '${confirmBtn}', exact: true }).click();`);
+          lines.push(`${indent}  }`);
+        }
+        lines.push(`${indent}  await page.waitForTimeout(500);`);
+        lines.push(`${indent}}`);
+      } else {
+        // Single or uniform group — emit sequentially
+        for (const modal of group) {
+          lines.push(...generateSingleModalCode(modal, indent));
+        }
+      }
+    }
+  } else {
+    // All modals have unique titles or uniform actions — emit sequentially
+    for (const modal of modals) {
+      lines.push(...generateSingleModalCode(modal, indent));
+    }
+  }
+
+  return lines;
+}
+
+function generateSingleModalCode(modal, indent) {
+  const lines = [];
+  lines.push('');
+  lines.push(`${indent}// Confirmation dialog: "${modal.title || 'confirm'}"`);
+  if (modal.action === 'confirm' && modal.buttonLabel) {
+    lines.push(`${indent}await page.getByRole('dialog').last().getByRole('button', { name: '${modal.buttonLabel}', exact: true }).click();`);
+  } else if (modal.action === 'cancel') {
+    lines.push(`${indent}await page.locator('[role="dialog"]').last().locator('button[aria-label="Close"]').click();`);
+  } else if (modal.action === 'confirm' && modal.buttons?.length > 0) {
+    const actionBtn = modal.buttons[modal.buttons.length - 1];
+    lines.push(`${indent}await page.getByRole('dialog').last().getByRole('button', { name: '${actionBtn.label}', exact: true }).click();`);
+  } else {
+    lines.push(`${indent}// TODO: resolve confirmation dialog (value=${JSON.stringify(modal.value)})`);
+  }
   return lines;
 }
 
