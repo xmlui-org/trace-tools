@@ -452,6 +452,25 @@ function generateStepCode(step, fillPlan, promiseCounter = 0) {
       lines.push(`${indent}// TODO: handle action "${step.action}"`);
   }
 
+  // Handle confirmation dialogs that appear during this step
+  if (step.modals?.length > 0) {
+    for (const modal of step.modals) {
+      lines.push('');
+      lines.push(`${indent}// Confirmation dialog: "${modal.title || 'confirm'}"`);
+      if (modal.action === 'confirm' && modal.buttonLabel) {
+        lines.push(`${indent}await page.getByRole('dialog').last().getByRole('button', { name: '${modal.buttonLabel}', exact: true }).click();`);
+      } else if (modal.action === 'cancel') {
+        lines.push(`${indent}await page.getByRole('dialog').last().getByRole('button', { name: 'Cancel', exact: true }).click();`);
+      } else if (modal.action === 'confirm' && modal.buttons?.length > 0) {
+        // Fallback: use the last button (action button) from the buttons array
+        const actionBtn = modal.buttons[modal.buttons.length - 1];
+        lines.push(`${indent}await page.getByRole('dialog').last().getByRole('button', { name: '${actionBtn.label}', exact: true }).click();`);
+      } else {
+        lines.push(`${indent}// TODO: resolve confirmation dialog (value=${JSON.stringify(modal.value)})`);
+      }
+    }
+  }
+
   // Await the response promise set up before the action
   if (apiAwait) {
     lines.push(`${indent}await ${promiseVar};`);
