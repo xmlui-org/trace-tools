@@ -45,13 +45,23 @@ function generatePlaywright(distilled, options = {}) {
     }
 
     // After a step that awaits a mutating API response (POST/PUT/DELETE),
-    // the DOM may not have re-rendered yet. Peek at the next step's target
+    // the DOM may not have re-rendered yet. If the step also has a GET
+    // (e.g. ListFolder refetch after a paste/move), wait for that GET first
+    // since it triggers the re-render. Then peek at the next step's target
     // and emit a waitFor() so the selector doesn't race against React.
     if (step.await?.api?.length > 0 && step.action !== 'startup') {
       const hasMutation = step.await.api.some(a =>
         a.method === 'POST' || a.method === 'PUT' || a.method === 'DELETE'
       );
       if (hasMutation && si + 1 < orderedSteps.length) {
+        // If this step also has a GET after the mutation (e.g. ListFolder
+        // refetch after paste/move), the table needs to re-render before we
+        // can interact with the next element. The waitFor() below handles that,
+        // but we also need a small delay to let React process the response.
+        const refreshGet = step.await.api.find(a => a.method === 'GET');
+        if (refreshGet) {
+          lines.push(`  await page.waitForTimeout(500);`);
+        }
         const next = orderedSteps[si + 1];
         const nt = next?.target;
         if (nt?.ariaRole && nt?.ariaName) {
@@ -555,14 +565,8 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
     return lines;
   }
 
-  // Fallback: testId when no ARIA or label
-  if (step.target?.testId) {
-    lines.push(`${indent}await page.getByTestId('${step.target.testId}').${method}();`);
-    return lines;
-  }
-
-  // No ARIA, no label, no testId — not actionable
-  lines.push(`${indent}// ACCESSIBILITY GAP: ${targetTag || 'element'} has no role or accessible name`);
+  // No ARIA, no label — not actionable
+  lines.push(`${indent}// ACCESSIBILITY GAP: ${step.target?.testId || targetTag || 'element'} has no role or accessible name`);
   return lines;
 }
 
@@ -587,10 +591,8 @@ function generateContextMenuCode(step, indent) {
     }
   } else if (label) {
     lines.push(`${indent}await page.getByText('${label}', { exact: true }).click({ button: 'right' });`);
-  } else if (step.target?.testId) {
-    lines.push(`${indent}await page.getByTestId('${step.target.testId}').click({ button: 'right' });`);
   } else {
-    lines.push(`${indent}// ACCESSIBILITY GAP: context menu target has no role or accessible name`);
+    lines.push(`${indent}// ACCESSIBILITY GAP: ${step.target?.testId || 'element'} has no role or accessible name (context menu)`);
   }
 
   return lines;
