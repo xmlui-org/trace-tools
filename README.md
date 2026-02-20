@@ -77,11 +77,17 @@ Then navigate to `/xs-diff.html` in the running app.
 
 ## Regression testing
 
-Trace-tools turns user journeys into regression tests. You never write Playwright — the pipeline generates it from traces. There are three ways to create a baseline, from easiest to most hands-on:
+Trace-tools turns user journeys into regression tests. You never write Playwright — the pipeline generates it from traces. There are two ways to create a baseline:
 
-### 1. Describe the journey (recommended)
+### 1. Perform the journey in the inspector
 
-Tell an AI what the journey should do:
+Open the app with the XMLUI inspector, click through the journey yourself, export the trace JSON, and save it as a baseline. This is the standard workflow — it requires no tooling beyond the app itself and works for anyone. A human clicking at human speed also provides [opt-in chaos](#opt-in-chaos) — timing-dependent behavior that automated captures miss.
+
+See [Capturing a trace](#capturing-a-trace) for details.
+
+### 2. Describe the journey
+
+With AI assistance, you can skip the clicking and just describe what the journey should do:
 
 ```
 Name: paste-conflict-keep-both
@@ -91,19 +97,11 @@ Journey: Multi-select two items (Meta+Click) → Copy via context menu → expan
 Key APIs: POST /CopyFile, POST /CopyFolder
 ```
 
-The AI generates a capture script, runs it, and the captured trace becomes the baseline. The capture script is disposable scaffolding — the baseline is what matters. From then on, `./test.sh run <name>` auto-generates a fresh Playwright test from the baseline every time.
+The AI generates a capture script, runs it, and the captured trace becomes the baseline. The capture script is disposable scaffolding — the baseline is what matters. This is useful for rapidly building out a test suite without manually performing each journey. See [Synthetic baselines](#synthetic-baselines) for a worked example.
 
-See [Synthetic baselines](#synthetic-baselines) for a worked example.
+---
 
-### 2. Perform the journey in the inspector
-
-Open the app with the XMLUI inspector, click through the journey yourself, export the trace JSON, and save it as a baseline. This is useful for exploratory testing and [opt-in chaos](#opt-in-chaos) — a human clicking at human speed can surface timing-dependent behavior that clean automated captures miss.
-
-See [Capturing a trace](#capturing-a-trace) for details.
-
-### 3. Write Playwright (rarely needed)
-
-For edge cases like chaos testing with specific timing patterns, you can write a capture script directly. But this is the exception — the normal workflow never requires touching Playwright.
+Either way, once a baseline exists, `./test.sh run <name>` auto-generates a fresh Playwright test from it every time. Nobody writes or maintains Playwright code.
 
 ---
 
@@ -162,9 +160,7 @@ See [Fixtures: deterministic server state](#fixtures-deterministic-server-state)
 
 ## Capturing a trace
 
-Most baselines are created by [describing the journey](#1-describe-the-journey-recommended) and letting an AI generate the capture. Manual capture is useful for exploratory testing and [opt-in chaos](#opt-in-chaos).
-
-To capture manually: open the XMLUI inspector in the running app and perform the user journey you want to test. When done, use the inspector's Export → Download JSON. The inspector prompts for a filename — use a descriptive name like `enable-disable-user` or `rename-file-roundtrip`. The browser saves it to your Downloads folder, e.g.:
+Open the XMLUI inspector in the running app and perform the user journey you want to test. When done, use the inspector's Export → Download JSON. The inspector prompts for a filename — use a descriptive name like `enable-disable-user` or `rename-file-roundtrip`. The browser saves it to your Downloads folder, e.g.:
 
 ```
 ~/Downloads/enable-disable-user.json
@@ -579,7 +575,7 @@ On the first passing replay, auto-update replaces the chaotic baseline with a cl
 
 ## Synthetic baselines
 
-This is the primary way to create baselines. Describe the journeys you want, and an AI generates capture scripts, runs them, and produces baseline traces. No manual clicking, no Playwright authoring.
+With AI assistance, you can create baselines by describing journeys instead of performing them. The AI generates capture scripts, runs them, and produces baseline traces — no manual clicking required. This is useful for rapidly expanding a test suite.
 
 Suppose you have this.
 
