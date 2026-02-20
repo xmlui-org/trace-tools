@@ -4,6 +4,7 @@
 
 - [Overview](#overview)
 - [The XMLUI inspector and xs-diff.html](#the-xmlui-inspector-and-xs-diffhtml)
+- [Regression testing](#regression-testing)
 - [Setup](#setup)
 - [Server state: the file tree your tests need](#server-state-the-file-tree-your-tests-need)
 - [Capturing a trace](#capturing-a-trace)
