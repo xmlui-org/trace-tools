@@ -105,6 +105,24 @@ function parseTrace(traceText) {
         }
       }
 
+      // Parse modal events (confirmation dialogs)
+      if (kind === 'modal:show') {
+        const titleMatch = rest.match(/^"([^"]+)"/);
+        if (titleMatch) {
+          event.title = titleMatch[1];
+        }
+      }
+      if (kind === 'modal:confirm') {
+        const valueMatch = rest.match(/value=([^\s,]+)/);
+        if (valueMatch) {
+          event.value = valueMatch[1];
+        }
+        const labelMatch = rest.match(/button="([^"]+)"/);
+        if (labelMatch) {
+          event.buttonLabel = labelMatch[1];
+        }
+      }
+
       currentTrace.events.push(event);
       currentEvent = event;
       continue;

@@ -86,6 +86,12 @@ function extractStep(trace) {
     await: extractAwaitConditions(trace)
   };
 
+  // Extract modal events from text-format traces
+  const modals = extractModals(trace.events);
+  if (modals.length > 0) {
+    step.modals = modals;
+  }
+
   return step;
 }
 
@@ -416,11 +422,67 @@ function extractStepFromJsonLogs(trace) {
     awaitConditions.navigate = { from: navigate.from, to: navigate.to };
   }
 
-  return {
+  const step = {
     action: interaction.interaction || interaction.eventName,
     target,
     await: Object.keys(awaitConditions).length > 0 ? awaitConditions : undefined
   };
+
+  // Extract modal (confirmation dialog) events from the same trace group
+  const modals = extractModals(events);
+  if (modals.length > 0) {
+    step.modals = modals;
+  }
+
+  return step;
+}
+
+/**
+ * Extract confirmation dialog interactions from a trace group's events.
+ * A modal sequence is: modal:show → modal:confirm or modal:cancel.
+ * There can be multiple modal sequences in one trace (e.g., delete confirmation
+ * followed by "folder not empty" confirmation).
+ */
+function extractModals(events) {
+  const modals = [];
+  const modalShows = events.filter(e => e.kind === 'modal:show');
+
+  for (let i = 0; i < modalShows.length; i++) {
+    const show = modalShows[i];
+    const showTs = show.perfTs || show.ts || 0;
+
+    // Find the next modal:confirm or modal:cancel after this show
+    const nextShowTs = modalShows[i + 1]?.perfTs || modalShows[i + 1]?.ts || Infinity;
+    const resolution = events.find(e =>
+      (e.kind === 'modal:confirm' || e.kind === 'modal:cancel') &&
+      (e.perfTs || e.ts || 0) > showTs &&
+      (e.perfTs || e.ts || 0) <= nextShowTs
+    );
+
+    const modal = {
+      title: show.title,
+      buttons: show.buttons, // available with enhanced engine instrumentation
+    };
+
+    if (resolution?.kind === 'modal:confirm') {
+      modal.action = 'confirm';
+      modal.value = resolution.value;
+      modal.buttonLabel = resolution.buttonLabel;
+      // Fallback: look up label from buttons array if buttonLabel not available
+      if (!modal.buttonLabel && modal.buttons && modal.value !== undefined) {
+        const btn = modal.buttons.find(b => b.value === modal.value);
+        if (btn) modal.buttonLabel = btn.label;
+      }
+    } else if (resolution?.kind === 'modal:cancel') {
+      modal.action = 'cancel';
+    } else {
+      modal.action = 'unknown'; // show without resolution (shouldn't happen)
+    }
+
+    modals.push(modal);
+  }
+
+  return modals;
 }
 
 // Export

@@ -285,6 +285,27 @@ function extractSemantics(input) {
     .map(e => e.detail?.label || e.detail?.testId)
     .filter(Boolean);
 
+  // Extract confirmation dialog outcomes (use timestamp ordering to handle
+  // multiple modals in the same trace group)
+  const modalShows = logs.filter(e => e.kind === 'modal:show');
+  const modalResolutions = logs.filter(e => e.kind === 'modal:confirm' || e.kind === 'modal:cancel');
+  const usedResolutions = new Set();
+  const confirmationDialogs = modalShows.map(show => {
+    const showTs = show.perfTs || show.ts || 0;
+    // Find the first unused resolution after this show event
+    const resolution = modalResolutions.find(r => {
+      const rTs = r.perfTs || r.ts || 0;
+      return rTs > showTs && !usedResolutions.has(r);
+    });
+    if (resolution) usedResolutions.add(resolution);
+    return {
+      title: show.title,
+      outcome: resolution?.kind === 'modal:confirm'
+        ? `confirm:${resolution.buttonLabel || resolution.value}`
+        : (resolution?.kind === 'modal:cancel' ? 'cancel' : 'unknown')
+    };
+  });
+
   // Extract journey steps (for --show-journey)
   const distilled = distillJsonLogs(logs);
   const journey = distilled.steps
@@ -307,6 +328,7 @@ function extractSemantics(input) {
     formSubmits,
     navigations: uniqueNavigations,
     contextMenus,
+    confirmationDialogs,
     journey
   };
 }
@@ -426,6 +448,21 @@ function compareSemanticTraces(trace1, trace2, options = {}) {
     });
   }
 
+  // Compare confirmation dialogs
+  const dialogs1 = (sem1.confirmationDialogs || []).map(d => `${d.title}→${d.outcome}`);
+  const dialogs2 = (sem2.confirmationDialogs || []).map(d => `${d.title}→${d.outcome}`);
+  const missingDialogs = dialogs1.filter(d => !dialogs2.includes(d));
+  const extraDialogs = dialogs2.filter(d => !dialogs1.includes(d));
+
+  if (missingDialogs.length > 0 || extraDialogs.length > 0) {
+    report.match = false;
+    report.differences.push({
+      type: 'confirmation_dialogs',
+      missing: missingDialogs,
+      extra: extraDialogs
+    });
+  }
+
   // Add summaries
   report.before = sem1;
   report.after = sem2;
@@ -475,6 +512,7 @@ function formatSemanticReport(report, options = {}) {
     lines.push(`  Mutations: ${formatMutations(sem.mutationCounts)}`);
     lines.push(`  Form submits: ${sem.formSubmits.length} (${sem.formSubmits.join(' → ')})`);
     lines.push(`  Context menus: ${sem.contextMenus.join(', ')}`);
+    lines.push(`  Confirmation dialogs: ${(sem.confirmationDialogs || []).length > 0 ? sem.confirmationDialogs.map(d => `"${d.title}"→${d.outcome}`).join(', ') : '(none)'}`);
     if (showJourney && sem.journey) {
       lines.push('  Journey:');
       for (const step of sem.journey) {
