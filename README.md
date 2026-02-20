@@ -104,6 +104,8 @@ The AI generates a capture script, runs it, and the captured trace becomes the b
 
 Either way, once a baseline exists, `./test.sh run <name>` auto-generates a fresh Playwright test from it every time. Nobody writes or maintains Playwright code.
 
+**If you find yourself needing to write Playwright, please [open an issue](https://github.com/xmlui-org/trace-tools/issues).** It should not be necessary. When auto-generated tests fall short, the fix is usually a small enhancement to the engine's `xsVerbose` tracing — for example, capturing modifier keys on click events or emitting toast messages to `_xsLogs`. Enriching the trace data fixes it for all apps and all future baselines, rather than requiring per-test Playwright workarounds.
+
 ---
 
 This works across all XMLUI apps. It has been tested on:
