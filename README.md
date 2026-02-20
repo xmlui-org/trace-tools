@@ -77,12 +77,35 @@ Then navigate to `/xs-diff.html` in the running app.
 
 ## Regression testing
 
-The regression testing workflow uses traces as its foundation:
+Trace-tools turns user journeys into regression tests. You never write Playwright — the pipeline generates it from traces. There are three ways to create a baseline, from easiest to most hands-on:
 
-1. Perform a user journey in the running app
-2. Export a trace from the XMLUI inspector (Export → Download JSON)
-3. Save it as a baseline
-4. Before and after code changes, replay the journey and compare semantically
+### 1. Describe the journey (recommended)
+
+Tell an AI what the journey should do:
+
+```
+Name: paste-conflict-keep-both
+Journey: Multi-select two items (Meta+Click) → Copy via context menu → expand tree →
+  right-click pastebox → Paste → confirm → paste again → handle conflict dialogs
+  (cancel file conflict, keep-both folder conflict) → verify "foo 1" appears
+Key APIs: POST /CopyFile, POST /CopyFolder
+```
+
+The AI generates a capture script, runs it, and the captured trace becomes the baseline. The capture script is disposable scaffolding — the baseline is what matters. From then on, `./test.sh run <name>` auto-generates a fresh Playwright test from the baseline every time.
+
+See [Synthetic baselines](#synthetic-baselines) for a worked example.
+
+### 2. Perform the journey in the inspector
+
+Open the app with the XMLUI inspector, click through the journey yourself, export the trace JSON, and save it as a baseline. This is useful for exploratory testing and [opt-in chaos](#opt-in-chaos) — a human clicking at human speed can surface timing-dependent behavior that clean automated captures miss.
+
+See [Capturing a trace](#capturing-a-trace) for details.
+
+### 3. Write Playwright (rarely needed)
+
+For edge cases like chaos testing with specific timing patterns, you can write a capture script directly. But this is the exception — the normal workflow never requires touching Playwright.
+
+---
 
 This works across all XMLUI apps. It has been tested on:
 
@@ -139,7 +162,9 @@ See [Fixtures: deterministic server state](#fixtures-deterministic-server-state)
 
 ## Capturing a trace
 
-Open the XMLUI inspector in the running app and perform the user journey you want to test. When done, use the inspector's Export → Download JSON. The inspector prompts for a filename — use a descriptive name like `enable-disable-user` or `rename-file-roundtrip`. The browser saves it to your Downloads folder, e.g.:
+Most baselines are created by [describing the journey](#1-describe-the-journey-recommended) and letting an AI generate the capture. Manual capture is useful for exploratory testing and [opt-in chaos](#opt-in-chaos).
+
+To capture manually: open the XMLUI inspector in the running app and perform the user journey you want to test. When done, use the inspector's Export → Download JSON. The inspector prompts for a filename — use a descriptive name like `enable-disable-user` or `rename-file-roundtrip`. The browser saves it to your Downloads folder, e.g.:
 
 ```
 ~/Downloads/enable-disable-user.json
@@ -553,6 +578,8 @@ To switch from synthetic to chaotic, capture a baseline manually in the inspecto
 On the first passing replay, auto-update replaces the chaotic baseline with a clean one, but the `.prev.json` preserves the original. If it reveals something interesting — an API call that only fires during slow human interaction, a modal that only appears when you pause between steps — that's a signal worth investigating. The chaos found it; the clean baseline wouldn't have.
 
 ## Synthetic baselines
+
+This is the primary way to create baselines. Describe the journeys you want, and an AI generates capture scripts, runs them, and produces baseline traces. No manual clicking, no Playwright authoring.
 
 Suppose you have this.
 

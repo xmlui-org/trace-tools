@@ -335,10 +335,11 @@ function extractStepFromJsonLogs(trace) {
     target.selectorPath = interaction.detail.selectorPath;
   }
 
-  // Capture keyboard modifiers for multi-select clicks (Ctrl+Click, Shift+Click)
+  // Capture keyboard modifiers for multi-select clicks (Ctrl+Click, Shift+Click, Option/Alt+Click)
   if (interaction.detail?.ctrlKey) target.ctrlKey = true;
   if (interaction.detail?.shiftKey) target.shiftKey = true;
   if (interaction.detail?.metaKey) target.metaKey = true;
+  if (interaction.detail?.altKey) target.altKey = true;
 
   // Capture ARIA role and accessible name for Playwright getByRole selectors
   if (interaction.detail?.ariaRole) {

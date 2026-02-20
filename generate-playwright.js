@@ -399,6 +399,7 @@ function clickOptions(target, extra = {}) {
   if (target?.ctrlKey) modifiers.push("'Control'");
   if (target?.shiftKey) modifiers.push("'Shift'");
   if (target?.metaKey) modifiers.push("'Meta'");
+  if (target?.altKey) modifiers.push("'Alt'");
 
   const opts = { ...extra };
   if (modifiers.length > 0) opts.modifiers = modifiers;

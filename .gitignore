@@ -3,5 +3,7 @@ node_modules/
 app-config.json
 captured-trace.json
 generated-*.spec.ts
+spec-*.spec.ts
+capture-scripts
 test-results/
 package-lock.json
