@@ -432,9 +432,9 @@ Add `--video` to any test command to record a `.webm` video of the browser sessi
 ./test.sh run-all --video
 ```
 
-Videos are saved in `trace-tools/test-results/<test-name>/video.webm`. Since the tests replay real UI journeys, the videos are always in sync with the current product — re-run after a UI change and the video updates automatically.
+Videos are saved to `traces/videos/<journey>.webm`. Since the tests replay real UI journeys, the videos are always in sync with the current product — re-run after a UI change and the video updates automatically.
 
-This uses Playwright's built-in video recording. The `--video` flag sets `PLAYWRIGHT_VIDEO=on` in the environment, which `playwright.config.ts` reads. There is no Playwright CLI flag for video — it's config-only.
+This uses Playwright's built-in video recording. The `--video` flag sets `PLAYWRIGHT_VIDEO=on` in the environment, which `playwright.config.ts` reads.
 
 ## Reading the test output
 
@@ -801,6 +801,8 @@ your-app/
 │   │   └── ignore-apis.txt         # APIs to exclude from semantic comparison
 │   ├── captures/                   # Output from test runs (gitignored)
 │   │   └── enable-disable-user.json
+│   ├── videos/                     # Recorded videos from --video runs (gitignored)
+│   │   └── enable-disable-user.webm
 │   └── fixtures/                   # Server filesystem state (checked in)
 │       └── shares/Documents/       # Minimal files needed by baselines
 └── trace-tools/                    # Cloned dependency (gitignored)
@@ -824,6 +826,7 @@ your-app/
 | `traces/baselines/*.json` | Yes | Reference traces — the "known good" behavior |
 | `traces/baselines/ignore-apis.txt` | Yes (if needed) | APIs to exclude from semantic comparison |
 | `traces/captures/*.json` | No | Output from test runs, compared against baselines |
+| `traces/videos/*.webm` | No | Recorded videos from `--video` runs |
 | `traces/fixtures/` | Yes | Server filesystem state needed by baselines |
 | `trace-tools/` | No | Cloned from github.com/xmlui-org/trace-tools |
 

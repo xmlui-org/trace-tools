@@ -15,6 +15,7 @@ CAPTURE_SCRIPTS="${CAPTURE_SCRIPTS:-$APP_DIR/traces/capture-scripts}"
 BASELINES="$APP_DIR/traces/baselines"
 CAPTURES="$APP_DIR/traces/captures"
 FIXTURES="$APP_DIR/traces/fixtures"
+VIDEOS="$APP_DIR/traces/videos"
 
 # Parse --video flag from any position
 ARGS=()
@@ -36,6 +37,19 @@ if [ ! -d "$TRACE_TOOLS" ]; then
   echo "  cd trace-tools && npm install && npx playwright install chromium"
   exit 1
 fi
+
+# Collect video from Playwright's test-results into traces/videos/
+collect_video() {
+  local name="$1"
+  if [ -n "$PLAYWRIGHT_VIDEO" ]; then
+    local video=$(ls -t "$TRACE_TOOLS"/test-results/*/video.webm 2>/dev/null | head -1)
+    if [ -n "$video" ]; then
+      mkdir -p "$VIDEOS"
+      cp "$video" "$VIDEOS/$name.webm"
+      echo "Video: traces/videos/$name.webm"
+    fi
+  fi
+}
 
 # Default no-op if app didn't define reset_fixtures
 if ! type reset_fixtures &>/dev/null; then
@@ -145,6 +159,7 @@ case "${1:-help}" in
 
     echo ""
     echo "═══════════════════════════════════════════════════════════════"
+    collect_video "$2"
     rm -f "$TEST_OUTPUT"
     exit $TEST_EXIT
     ;;
@@ -256,6 +271,7 @@ case "${1:-help}" in
     echo ""
     echo "═══════════════════════════════════════════════════════════════"
 
+    collect_video "$2"
     rm -f "$TEST_OUTPUT"
 
     # Exit 0 if semantics match even if a selector failed
