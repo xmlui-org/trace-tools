@@ -20,6 +20,7 @@ export default defineConfig({
     headless: false, // Set to true for CI
     trace: 'on-first-retry',
     viewport: { width: 1440, height: 900 },
+    ...(process.env.PLAYWRIGHT_VIDEO === 'on' ? { video: 'on' } : {}),
   },
   projects: [
     ...(hasAuth ? [{

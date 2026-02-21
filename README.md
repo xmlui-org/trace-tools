@@ -10,6 +10,7 @@
 - [Capturing a trace](#capturing-a-trace)
 - [Walkthrough: capturing and testing user journeys](#walkthrough-capturing-and-testing-user-journeys)
 - [Commands](#commands)
+- [Video recording](#video-recording)
 - [Reading the test output](#reading-the-test-output)
 - [How semantic comparison works](#how-semantic-comparison-works)
 - [How selectors are generated](#how-selectors-are-generated)
@@ -121,9 +122,11 @@ cd trace-tools
 npm install
 npx playwright install chromium
 cd ..
-cp trace-tools/example-test.sh test.sh
+cp trace-tools/example-test.sh test.sh    # customize, then source test-base.sh
 mkdir -p traces/baselines traces/captures
 ```
+
+Your app's `test.sh` defines app-specific configuration (like `reset_fixtures()`) and then sources the shared logic from `trace-tools/test-base.sh`. See `example-test.sh` for the minimal template. This means new features (like `--video`) are automatically available to all apps when trace-tools is updated — no need to copy changes into each app's `test.sh`.
 
 **Important:** Before running tests, set up the server's file tree from the app's fixtures. See [Server state](#server-state-the-file-tree-your-tests-need) below.
 
@@ -418,6 +421,20 @@ Prints a summary of a baseline trace — the number of steps, events, and which 
 Journey: 10 steps, 143 events
   APIs: GET /groups, GET /license, GET /settings, GET /status, GET /users, PUT /users/elvis
 ```
+
+## Video recording
+
+Add `--video` to any test command to record a `.webm` video of the browser session:
+
+```bash
+./test.sh run rename-file-roundtrip --video
+./test.sh spec folder-tree-navigate --video
+./test.sh run-all --video
+```
+
+Videos are saved in `trace-tools/test-results/<test-name>/video.webm`. Since the tests replay real UI journeys, the videos are always in sync with the current product — re-run after a UI change and the video updates automatically.
+
+This uses Playwright's built-in video recording. The `--video` flag sets `PLAYWRIGHT_VIDEO=on` in the environment, which `playwright.config.ts` reads. There is no Playwright CLI flag for video — it's config-only.
 
 ## Reading the test output
 
@@ -787,8 +804,10 @@ your-app/
 │   └── fixtures/                   # Server filesystem state (checked in)
 │       └── shares/Documents/       # Minimal files needed by baselines
 └── trace-tools/                    # Cloned dependency (gitignored)
+    ├── test-base.sh                # Shared test logic (sourced by app's test.sh)
+    ├── example-test.sh             # Minimal template for app's test.sh
     ├── generate-playwright.js      # Generates .spec.ts from a baseline trace
-    ├── distill-trace.js          # Distills steps from raw trace
+    ├── distill-trace.js            # Distills steps from raw trace
     ├── compare-traces.js           # Semantic comparison (APIs, forms, nav)
     ├── summarize.js                # Journey summary
     ├── auth-setup.ts               # Playwright auth (reads app-config.json)
@@ -800,7 +819,7 @@ your-app/
 
 | File | Checked in? | Purpose |
 |------|-------------|---------|
-| `test.sh` | Yes | App-level test runner |
+| `test.sh` | Yes | App-level config + `source trace-tools/test-base.sh` |
 | `app-config.json` | Yes (if needed) | Base URL and auth configuration |
 | `traces/baselines/*.json` | Yes | Reference traces — the "known good" behavior |
 | `traces/baselines/ignore-apis.txt` | Yes (if needed) | APIs to exclude from semantic comparison |
