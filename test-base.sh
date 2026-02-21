@@ -8,6 +8,8 @@
 #   TRACE_TOOLS      — path to trace-tools (default: $APP_DIR/trace-tools)
 #   CAPTURE_SCRIPTS  — path to capture scripts (default: $APP_DIR/traces/capture-scripts)
 #   reset_fixtures() — function to reset server state (default: no-op)
+#   pre_spec_hook()  — function called before spec runs, receives spec name as $1
+#                      (use for exporting env vars like MOCK_PATH)
 
 # Defaults for anything the app didn't set
 TRACE_TOOLS="${TRACE_TOOLS:-$APP_DIR/trace-tools}"
@@ -37,6 +39,59 @@ if [ ! -d "$TRACE_TOOLS" ]; then
   echo "  cd trace-tools && npm install && npx playwright install chromium"
   exit 1
 fi
+
+# ---------------------------------------------------------------------------
+# setup_capture_scripts — ensures trace-tools/capture-scripts mirrors the
+# authoritative source at traces/capture-scripts.
+#
+# If LINK already exists as a directory (junction, stale copy, or anything
+# else bash cannot distinguish), we do a targeted per-file sync based on
+# modification time — no rm -rf, safe regardless of drive or location.
+#
+# If LINK does not yet exist, we try to create a proper live link:
+#   Windows: mklink /J  (junction, same drive, no admin)
+#         →  mklink /D  (symlink, cross-drive, needs Developer Mode or admin)
+#   Unix:   ln -s
+#   Fallback: cp -r (file copy; subsequent calls keep it in sync via the loop)
+# ---------------------------------------------------------------------------
+setup_capture_scripts() {
+  local LINK="$TRACE_TOOLS/capture-scripts"
+  local SOURCE="$CAPTURE_SCRIPTS"
+
+  # POSIX symlink already in place — done.
+  [ -L "$LINK" ] && return 0
+
+  # No capture-scripts directory in the app — nothing to link.
+  [ -d "$SOURCE" ] || return 0
+
+  if [ -d "$LINK" ]; then
+    for f in "$SOURCE"/*.spec.ts; do
+      [ -f "$f" ] || continue
+      local base_name
+      base_name="$(basename "$f")"
+      if [ ! -f "$LINK/$base_name" ] || [ "$f" -nt "$LINK/$base_name" ]; then
+        cp "$f" "$LINK/$base_name"
+      fi
+    done
+    return 0
+  fi
+
+  # LINK does not exist — create a live link.
+  if command -v cygpath >/dev/null 2>&1; then
+    local win_link win_src
+    win_link="$(cygpath -w "$LINK")"
+    win_src="$(cygpath -w "$SOURCE")"
+    cmd.exe /c "mklink /J \"$win_link\" \"$win_src\"" >/dev/null 2>&1 && return 0
+    cmd.exe /c "mklink /D \"$win_link\" \"$win_src\"" >/dev/null 2>&1 && return 0
+  fi
+
+  ln -s "$SOURCE" "$LINK" 2>/dev/null && return 0
+
+  echo "Warning: could not create a link for capture-scripts — using file copy."
+  cp -r "$SOURCE" "$LINK"
+}
+
+setup_capture_scripts
 
 # Collect video from Playwright's test-results into traces/videos/
 collect_video() {
@@ -124,25 +179,23 @@ case "${1:-help}" in
     HOOK="$FIXTURES/$2.pre.sh"
     if [ -f "$HOOK" ]; then
       echo "Running fixture hook: $HOOK"
+      # Call app's pre_spec_hook if defined (e.g. to export MOCK_PATH)
+      if type pre_spec_hook &>/dev/null; then
+        pre_spec_hook "$2"
+      fi
       bash "$HOOK"
     fi
 
-    # 3. Copy spec into trace-tools/ and run it
+    # 3. Run the spec via the capture-scripts link
     echo ""
     echo "═══════════════════════════════════════════════════════════════"
     echo "                    SPEC TEST: $2"
     echo "═══════════════════════════════════════════════════════════════"
     echo ""
     cd "$TRACE_TOOLS"
-    SPEC_COPY="$TRACE_TOOLS/spec-$2.spec.ts"
-    cp "$SPEC" "$SPEC_COPY"
     TEST_OUTPUT=$(mktemp)
-    npx playwright test "spec-$2.spec.ts" > "$TEST_OUTPUT" 2>&1
+    npx playwright test "capture-scripts/$2.spec.ts" > "$TEST_OUTPUT" 2>&1
     TEST_EXIT=$?
-    rm -f "$SPEC_COPY"
-
-    # Show test stdout (console.log output from the spec)
-    grep -v "^$" "$TEST_OUTPUT" | grep -v "Running " | grep -v "passed " | grep -v "^\[chromium\]" 2>/dev/null
 
     if [ $TEST_EXIT -eq 0 ]; then
       echo "PASS — Spec completed successfully"
