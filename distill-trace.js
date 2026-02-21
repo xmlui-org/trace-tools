@@ -349,6 +349,11 @@ function extractStepFromJsonLogs(trace) {
     target.ariaName = interaction.detail.ariaName;
   }
 
+  // Capture nthMatch for disambiguating duplicate-named elements
+  if (interaction.detail?.nthMatch !== undefined) {
+    target.nthMatch = interaction.detail.nthMatch;
+  }
+
   // Capture testId (uid) as fallback selector when ARIA isn't available
   if (interaction.uid) {
     target.testId = interaction.uid;
