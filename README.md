@@ -125,14 +125,17 @@ The AI generates a capture script, runs it, and the captured trace becomes the b
 
 For advanced scenarios where baseline mode isn't yet sufficient, you can write a Playwright spec by hand and place it in `traces/capture-scripts/<name>.spec.ts`. Run it with `./test.sh spec <name>` or run all specs with `./test.sh spec-all`.
 
-Hand-written specs can do things auto-generated tests currently cannot:
+Auto-generated tests now include assertions derived from the trace data:
 
-- **Assert outcomes** — verify that a renamed file appears with its new name, that a toast shows the expected message, that a conflict resolution produced the right result.
-- **Validate dialog content** — check that error messages and confirmation dialogs contain the expected text, not just click through them.
-- **Handle complex conditional flows** — branch on dialog content (e.g. "is this a file conflict or a folder conflict?") with targeted recovery logic.
-- **Add targeted waits and retries** — insert explicit synchronization for flaky async operations like uploads or server-side conflict detection.
+- **Toast messages** — when the engine emits `kind: "toast"` events (requires engine build with toast tracing), the generator asserts toast text is visible: `await expect(page.getByText('Pasted 1 item(s), 1 skipped.')).toBeVisible()`. To add toast assertions to existing baselines: `./test.sh run <journey>` (re-captures with new engine), then `./test.sh update <journey>` (promotes capture to baseline).
+- **File list changes** — the generator diffs consecutive `DataSource:fileCatalogData` snapshots. After a mutating API call (paste, delete, rename), it asserts files that appeared (`toBeVisible`) or disappeared (`toHaveCount(0)`). No engine change needed — this data is already in traces. Just `./test.sh update <journey>` to promote existing captures.
 
-Spec mode is useful when a QA engineer needs to verify specific business logic that goes beyond "did the journey complete without errors?" The long-term goal is to narrow this gap by teaching the generator to emit assertions from `state:changes` events in the trace — but spec mode is available now for cases that need it.
+Hand-written specs are still needed for:
+
+- **Browser-native interactions** — file uploads via drag-and-drop or OS file picker require `addInitScript` mocking that can't be derived from traces.
+- **Tree item presence** — asserting that folders appear/disappear in the tree sidebar (tree structure is not yet in `state:changes`).
+- **Complex conditional flows** — branching on dialog content with targeted recovery logic.
+- **Targeted waits and retries** — explicit synchronization for flaky async operations.
 
 ---
 
