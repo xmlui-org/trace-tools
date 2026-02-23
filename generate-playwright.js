@@ -538,6 +538,18 @@ function generateStepCode(step, fillPlan, promiseCounter = 0) {
     }
   }
 
+  // Assert file list changes after mutating operations
+  if (step.filesAdded?.length > 0 || step.filesRemoved?.length > 0) {
+    for (const name of (step.filesAdded || [])) {
+      const escaped = name.replace(/'/g, "\\'");
+      lines.push(`${indent}await expect(page.getByRole('cell', { name: '${escaped}', exact: true })).toBeVisible({ timeout: 10000 });`);
+    }
+    for (const name of (step.filesRemoved || [])) {
+      const escaped = name.replace(/'/g, "\\'");
+      lines.push(`${indent}await expect(page.getByRole('cell', { name: '${escaped}', exact: true })).toHaveCount(0);`);
+    }
+  }
+
   return lines;
 }
 

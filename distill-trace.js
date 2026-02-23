@@ -331,6 +331,33 @@ function distillJsonLogs(logs) {
     }
   }
 
+  // Diff consecutive DataSource:fileCatalogData snapshots to detect files
+  // added or removed by mutating operations. Only attach to steps that have
+  // mutating API calls (POST/PUT/DELETE/PATCH) — navigation-only folder
+  // changes are not assertion-worthy.
+  let prevFileSnapshot = null;
+  for (const step of steps) {
+    if (step._fileCatalogSnapshot) {
+      if (prevFileSnapshot) {
+        const prevSet = new Set(prevFileSnapshot);
+        const currSet = new Set(step._fileCatalogSnapshot);
+        const added = step._fileCatalogSnapshot.filter(f => !prevSet.has(f));
+        const removed = prevFileSnapshot.filter(f => !currSet.has(f));
+
+        const hasMutation = step.await?.api?.some(a =>
+          ['POST', 'PUT', 'DELETE', 'PATCH'].includes(a.method)
+        );
+
+        if (hasMutation && (added.length > 0 || removed.length > 0)) {
+          if (added.length > 0) step.filesAdded = added;
+          if (removed.length > 0) step.filesRemoved = removed;
+        }
+      }
+      prevFileSnapshot = step._fileCatalogSnapshot;
+      delete step._fileCatalogSnapshot;
+    }
+  }
+
   // Dedupe: if we have click + click + dblclick on same target, keep only dblclick
   const deduped = [];
   for (let i = 0; i < steps.length; i++) {
@@ -506,6 +533,18 @@ function extractStepFromJsonLogs(trace) {
     .map(e => ({ type: e.toastType || 'default', message: e.message }));
   if (toasts.length > 0) {
     step.toasts = toasts;
+  }
+
+  // Capture the latest DataSource file list snapshot for cross-step diffing.
+  // The caller (distillJsonLogs) will diff consecutive snapshots and attach
+  // filesAdded/filesRemoved to steps with mutating API calls.
+  const fileCatalogChanges = events
+    .filter(e => e.kind === 'state:changes' && e.diffJson)
+    .flatMap(e => e.diffJson)
+    .filter(d => d.path === 'DataSource:fileCatalogData' && Array.isArray(d.after));
+  if (fileCatalogChanges.length > 0) {
+    const lastSnapshot = fileCatalogChanges[fileCatalogChanges.length - 1].after;
+    step._fileCatalogSnapshot = lastSnapshot.map(f => f.name).filter(Boolean);
   }
 
   return step;
