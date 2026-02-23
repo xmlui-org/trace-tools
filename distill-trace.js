@@ -500,6 +500,14 @@ function extractStepFromJsonLogs(trace) {
     step.modals = modals;
   }
 
+  // Extract toast notifications from the same trace group
+  const toasts = events
+    .filter(e => e.kind === 'toast')
+    .map(e => ({ type: e.toastType || 'default', message: e.message }));
+  if (toasts.length > 0) {
+    step.toasts = toasts;
+  }
+
   return step;
 }
 

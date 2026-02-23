@@ -530,6 +530,14 @@ function generateStepCode(step, fillPlan, promiseCounter = 0) {
     lines.push(...generateNavigateAwaitCode(step.await, indent));
   }
 
+  // Assert toast notifications that appeared during this step
+  if (step.toasts?.length > 0) {
+    for (const t of step.toasts) {
+      const escaped = t.message.replace(/'/g, "\\'");
+      lines.push(`${indent}await expect(page.getByText('${escaped}')).toBeVisible({ timeout: 10000 });`);
+    }
+  }
+
   return lines;
 }
 
