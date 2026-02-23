@@ -366,6 +366,51 @@ case "${1:-help}" in
     [ $FAIL -eq 0 ]
     ;;
 
+  test-all)
+    # Run all specs, then all baselines, and report a combined summary.
+    PASS=0
+    FAIL=0
+    FAILED=()
+
+    # Specs
+    for f in "$CAPTURE_SCRIPTS"/*.spec.ts; do
+      [ -f "$f" ] || continue
+      name=$(basename "$f" .spec.ts)
+      echo "--- Spec: $name ---"
+      "$0" spec "$name"
+      if [ $? -eq 0 ]; then
+        PASS=$((PASS + 1))
+      else
+        FAIL=$((FAIL + 1))
+        FAILED+=("spec:$name")
+      fi
+      echo ""
+    done
+
+    # Baselines
+    for f in "$BASELINES"/*.json; do
+      [ -f "$f" ] || continue
+      name=$(basename "$f" .json)
+      echo "--- Baseline: $name ---"
+      "$0" run "$name"
+      if [ $? -eq 0 ]; then
+        PASS=$((PASS + 1))
+      else
+        FAIL=$((FAIL + 1))
+        FAILED+=("run:$name")
+      fi
+      echo ""
+    done
+
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  Results: $PASS passed, $FAIL failed"
+    if [ ${#FAILED[@]} -gt 0 ]; then
+      echo "  Failed: ${FAILED[*]}"
+    fi
+    echo "═══════════════════════════════════════════════════════════════"
+    [ $FAIL -eq 0 ]
+    ;;
+
   update)
     if [ -z "$2" ]; then
       echo "Usage: ./test.sh update <journey-name>"
@@ -404,6 +449,9 @@ case "${1:-help}" in
 
   help|*)
     echo "Usage: ./test.sh <command> [args]"
+    echo ""
+    echo "Run everything:"
+    echo "  test-all [--video]             Run all specs and all baselines"
     echo ""
     echo "Spec-based tests (no baseline required):"
     echo "  spec <name> [--video]          Reset fixtures, run capture-scripts/<name>.spec.ts"

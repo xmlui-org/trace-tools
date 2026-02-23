@@ -418,38 +418,56 @@ This copies `traces/captures/enable-disable-user.json` to `traces/baselines/enab
 
 ## Commands
 
-### `./test.sh list`
+### `./test.sh test-all`
 
-Lists all available baselines with their event counts.
-
-```bash
-./test.sh list
-```
-
-```
-Available baselines:
-  enable-disable-user (143 events)
-  create-delete-user (87 events)
-```
-
-Reads filenames from `traces/baselines/*.json`. The event count is the number of raw trace events in each file.
-
-### `./test.sh save <trace.json> <journey-name>`
-
-Saves an exported trace as a named baseline.
+Runs everything — all specs, then all baselines — and reports a combined summary.
 
 ```bash
-./test.sh save ~/Downloads/enable-disable-user.json enable-disable-user
+./test.sh test-all
 ```
 
-This copies the trace file to `traces/baselines/<journey-name>.json` and prints a journey summary showing the steps, event count, and API calls. The source file (typically in `~/Downloads/`) is left unchanged.
+```
+--- Spec: navigation ---
+PASS — Spec completed successfully
+
+--- Spec: copy-paste-and-move ---
+PASS — Spec completed successfully
+
+--- Baseline: paste-conflict-keep-both ---
+PASS — Journey completed successfully
+SEMANTIC: PASS — Same APIs, forms, and navigation
+
+═══════════════════════════════════════════════════════════════
+  Results: 3 passed, 0 failed
+═══════════════════════════════════════════════════════════════
+```
+
+Failed tests are prefixed with their mode (`spec:` or `run:`) so you can tell which kind failed.
+
+### `./test.sh spec <name>`
+
+Runs a hand-written Playwright spec from `traces/capture-scripts/<name>.spec.ts`. Resets fixtures first.
+
+```bash
+./test.sh spec navigation
+```
+
+No baseline is needed — the spec is the test. Use this for scenarios that require explicit assertions or complex conditional logic that the auto-generator doesn't yet handle. See [Spec mode](#spec-mode-hand-written-playwright-tests) for when this is appropriate.
+
+### `./test.sh spec-all`
+
+Runs every spec in `traces/capture-scripts/` and reports a summary.
+
+```bash
+./test.sh spec-all
+```
 
 ### `./test.sh run <journey-name>`
 
-The main command. Generates a Playwright test from a baseline, runs it, captures a new trace, and compares the two.
+Generates a Playwright test from a baseline, runs it, captures a new trace, and compares the two.
 
 ```bash
-./test.sh run enable-disable-user
+./test.sh run paste-conflict-keep-both
 ```
 
 What happens under the hood:
@@ -470,26 +488,41 @@ Runs every baseline in `traces/baselines/` and reports a summary.
 ./test.sh run-all
 ```
 
-```
---- Running: enable-disable-user ---
-...
-SEMANTIC: PASS
+### `./test.sh list`
 
---- Running: create-delete-user ---
-...
-SEMANTIC: PASS
+Lists all available specs and baselines.
 
-═══════════════════════════════════════════════════════════════
-  Results: 2 passed, 0 failed
-═══════════════════════════════════════════════════════════════
+```bash
+./test.sh list
 ```
+
+```
+Spec-based tests (capture-scripts):
+  navigation
+  copy-paste-and-move
+  file-operations
+
+Baseline-based tests (recorded journeys):
+  paste-conflict-keep-both (139 events)
+  rename-file-roundtrip (87 events)
+```
+
+### `./test.sh save <trace.json> <journey-name>`
+
+Saves an exported trace as a named baseline.
+
+```bash
+./test.sh save ~/Downloads/paste-conflict-keep-both.json paste-conflict-keep-both
+```
+
+This copies the trace file to `traces/baselines/<journey-name>.json` and prints a journey summary showing the steps, event count, and API calls. The source file (typically in `~/Downloads/`) is left unchanged.
 
 ### `./test.sh update <journey-name>`
 
 Promotes the latest capture to become the new baseline.
 
 ```bash
-./test.sh update enable-disable-user
+./test.sh update paste-conflict-keep-both
 ```
 
 Use this when the app's behavior has intentionally changed — a new API endpoint, a different form field, an added navigation step. The capture from the most recent `run` is copied to `traces/baselines/<journey>.json`, replacing the old baseline. Commit the updated baseline.
@@ -499,7 +532,7 @@ Use this when the app's behavior has intentionally changed — a new API endpoin
 Runs the semantic comparison without running a test. Useful for comparing a previously captured trace against its baseline.
 
 ```bash
-./test.sh compare enable-disable-user
+./test.sh compare paste-conflict-keep-both
 ```
 
 Compares `traces/baselines/<journey>.json` against `traces/captures/<journey>.json`. You must have run the test at least once to have a capture.
@@ -509,30 +542,12 @@ Compares `traces/baselines/<journey>.json` against `traces/captures/<journey>.js
 Prints a summary of a baseline trace — the number of steps, events, and which API endpoints are called.
 
 ```bash
-./test.sh summary enable-disable-user
+./test.sh summary paste-conflict-keep-both
 ```
 
 ```
-Journey: 10 steps, 143 events
-  APIs: GET /groups, GET /license, GET /settings, GET /status, GET /users, PUT /users/elvis
-```
-
-### `./test.sh spec <name>`
-
-Runs a hand-written Playwright spec from `traces/capture-scripts/<name>.spec.ts`. Resets fixtures first.
-
-```bash
-./test.sh spec paste-conflict-keep-both
-```
-
-No baseline is needed — the spec is the test. Use this for scenarios that require explicit assertions or complex conditional logic that the auto-generator doesn't yet handle. See [Spec mode](#spec-mode-hand-written-playwright-tests) for when this is appropriate.
-
-### `./test.sh spec-all`
-
-Runs every spec in `traces/capture-scripts/` and reports a summary.
-
-```bash
-./test.sh spec-all
+Journey: 10 steps, 139 events
+  APIs: GET /ListFolder, GET /ListShares, POST /CopyFile, POST /CopyFolder
 ```
 
 ## Video recording
@@ -540,9 +555,9 @@ Runs every spec in `traces/capture-scripts/` and reports a summary.
 Add `--video` to any test command to record a `.webm` video of the browser session:
 
 ```bash
-./test.sh run rename-file-roundtrip --video
-./test.sh spec folder-tree-navigate --video
-./test.sh run-all --video
+./test.sh test-all --video
+./test.sh spec navigation --video
+./test.sh run paste-conflict-keep-both --video
 ```
 
 Videos are saved to `traces/videos/<journey>.webm`. Since the tests replay real UI journeys, the videos are always in sync with the current product — re-run after a UI change and the video updates automatically.
