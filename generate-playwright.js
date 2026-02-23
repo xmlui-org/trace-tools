@@ -79,8 +79,6 @@ function generatePlaywright(distilled, options = {}) {
           } else {
             lines.push(`  await page.getByRole('${nt.ariaRole}', { name: '${nt.ariaName}', exact: true }).waitFor();`);
           }
-        } else if (nt?.label) {
-          lines.push(`  await page.getByText('${nt.label}', { exact: true }).waitFor();`);
         }
       }
     }
@@ -512,7 +510,10 @@ function generateStepCode(step, fillPlan, promiseCounter = 0) {
       lines.push(`${indent}// TODO: handle action "${step.action}"`);
   }
 
-  // Handle confirmation dialogs that appear during this step
+  // Handle confirmation dialogs that appear during this step.
+  // Each dialog may appear asynchronously (e.g. Conflict dialogs appear after the
+  // server detects a conflict during copy/paste). Always waitFor() the dialog button
+  // before clicking — harmless if the dialog is already open, essential if it's async.
   if (step.modals?.length > 0) {
     lines.push(...generateModalCode(step.modals, indent));
   }
@@ -751,11 +752,15 @@ function generateSingleModalCode(modal, indent) {
   lines.push('');
   lines.push(`${indent}// Confirmation dialog: "${modal.title || 'confirm'}"`);
   if (modal.action === 'confirm' && modal.buttonLabel) {
+    // waitFor() before click — harmless if dialog is already open, essential if async
+    lines.push(`${indent}await page.getByRole('button', { name: '${modal.buttonLabel}', exact: true }).waitFor();`);
     lines.push(`${indent}await page.getByRole('dialog').last().getByRole('button', { name: '${modal.buttonLabel}', exact: true }).click();`);
   } else if (modal.action === 'cancel') {
+    lines.push(`${indent}await page.locator('[role="dialog"]').last().locator('button[aria-label="Close"]').waitFor();`);
     lines.push(`${indent}await page.locator('[role="dialog"]').last().locator('button[aria-label="Close"]').click();`);
   } else if (modal.action === 'confirm' && modal.buttons?.length > 0) {
     const actionBtn = modal.buttons[modal.buttons.length - 1];
+    lines.push(`${indent}await page.getByRole('button', { name: '${actionBtn.label}', exact: true }).waitFor();`);
     lines.push(`${indent}await page.getByRole('dialog').last().getByRole('button', { name: '${actionBtn.label}', exact: true }).click();`);
   } else {
     lines.push(`${indent}// TODO: resolve confirmation dialog (value=${JSON.stringify(modal.value)})`);

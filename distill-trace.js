@@ -242,6 +242,51 @@ function extractAwaitConditions(trace) {
  * Distill raw JSON logs from window._xsLogs (captured by Playwright)
  */
 function distillJsonLogs(logs) {
+  // Build a global modifier-key timeline from all keydown/keyup interaction events.
+  // This is needed because Table row clicks are captured in a separate traceId from
+  // the keydown event for the modifier key (e.g. Ctrl), so we can't see the modifier
+  // inside the click's own trace group. We resolve it via perfTs proximity instead.
+  const MODIFIER_KEYS = { Control: 'Control', Meta: 'Meta', Shift: 'Shift', Alt: 'Alt' };
+  const modifierTimeline = []; // { perfTs, key, active }
+  for (const log of logs) {
+    if (log.kind !== 'interaction') continue;
+    const action = log.interaction || log.eventName;
+    if (action !== 'keydown' && action !== 'keyup') continue;
+    const key = (log.detail || {}).key;
+    if (!MODIFIER_KEYS[key]) continue;
+    modifierTimeline.push({ perfTs: log.perfTs || 0, key, active: action === 'keydown' });
+  }
+  modifierTimeline.sort((a, b) => a.perfTs - b.perfTs);
+
+  // Returns the set of modifier keys active at a given perfTs.
+  // A modifier is considered "active" if its keydown occurred within
+  // MAX_MODIFIER_HOLD_MS before perfTs and no keyup has cleared it.
+  // The time cap prevents a missing keyup from leaking the modifier
+  // into all subsequent steps indefinitely.
+  const MAX_MODIFIER_HOLD_MS = 500;
+  function getActiveModifiers(perfTs) {
+    const active = new Set();
+    const lastKeydownTs = new Map(); // key → perfTs of most recent keydown
+    for (const entry of modifierTimeline) {
+      if (entry.perfTs > perfTs) break;
+      if (entry.active) {
+        active.add(entry.key);
+        lastKeydownTs.set(entry.key, entry.perfTs);
+      } else {
+        active.delete(entry.key);
+        lastKeydownTs.delete(entry.key);
+      }
+    }
+    // Remove modifiers whose keydown was too far in the past (key was likely
+    // released but the keyup event was not captured in the trace).
+    for (const key of [...active]) {
+      if (perfTs - (lastKeydownTs.get(key) || 0) > MAX_MODIFIER_HOLD_MS) {
+        active.delete(key);
+      }
+    }
+    return [...active];
+  }
+
   // Group logs by traceId
   const traces = new Map();
 
@@ -267,6 +312,21 @@ function distillJsonLogs(logs) {
   for (const trace of traceArray) {
     const step = extractStepFromJsonLogs(trace);
     if (step) {
+      // If click/dblclick has no modifiers in its detail, infer from global timeline.
+      // Table row clicks are captured in a separate traceId from the keydown event
+      // for the modifier key (e.g. Ctrl), so we resolve via perfTs proximity.
+      if ((step.action === 'click' || step.action === 'dblclick') &&
+          !step.target?.ctrlKey && !step.target?.metaKey &&
+          !step.target?.shiftKey && !step.target?.altKey) {
+        const activeMods = getActiveModifiers(trace.firstPerfTs);
+        if (activeMods.length > 0) {
+          if (!step.target) step.target = {};
+          if (activeMods.includes('Control')) step.target.ctrlKey = true;
+          if (activeMods.includes('Meta')) step.target.metaKey = true;
+          if (activeMods.includes('Shift')) step.target.shiftKey = true;
+          if (activeMods.includes('Alt')) step.target.altKey = true;
+        }
+      }
       steps.push(step);
     }
   }
