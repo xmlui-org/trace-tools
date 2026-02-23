@@ -5,7 +5,10 @@
 - [Overview](#overview)
 - [The XMLUI inspector and xs-diff.html](#the-xmlui-inspector-and-xs-diffhtml)
 - [Regression testing](#regression-testing)
+  - [Baseline mode: record, replay, compare](#baseline-mode-record-replay-compare)
+  - [Spec mode: hand-written Playwright tests](#spec-mode-hand-written-playwright-tests)
 - [Setup](#setup)
+- [Directory layout](#directory-layout)
 - [Server state: the file tree your tests need](#server-state-the-file-tree-your-tests-need)
 - [Capturing a trace](#capturing-a-trace)
 - [Walkthrough: capturing and testing user journeys](#walkthrough-capturing-and-testing-user-journeys)
@@ -19,7 +22,6 @@
 - [Synthetic baselines](#synthetic-baselines)
 - [Opt-in app-level timing with xsTrace](#opt-in-app-level-timing-with-xstrace)
 - [Standalone vs dev-environment apps](#standalone-vs-dev-environment-apps)
-- [Directory layout](#directory-layout)
 - [Inspector viewer (xs-diff.html)](#inspector-viewer-xs-diffhtml)
 - [Fixtures: deterministic server state](#fixtures-deterministic-server-state)
 - [Auth configuration](#auth-configuration)
@@ -79,15 +81,29 @@ Then navigate to `/xs-diff.html` in the running app.
 
 ## Regression testing
 
-Trace-tools turns user journeys into regression tests. You never write Playwright — the pipeline generates it from traces. There are two ways to create a baseline:
+Trace-tools provides two ways to test XMLUI apps: **baseline mode** (the primary workflow) and **spec mode** (for advanced cases that need hand-written assertions).
 
-### 1. Perform the journey in the inspector
+### Baseline mode: record, replay, compare
+
+The core idea: nobody writes Playwright. You record a user journey, save its trace as a baseline, and `./test.sh run <name>` auto-generates a fresh Playwright test from it every time. The pipeline captures a new trace during replay and compares it semantically against the baseline — same APIs, same forms, same navigation means the app's behavior is unchanged.
+
+**Who does what:**
+
+- **A human** (or an AI) performs the journey once to create a baseline trace. This can be done by clicking through the app with the XMLUI inspector open, or by describing the journey and letting AI generate a capture script. Either way, the result is a JSON trace file saved to `traces/baselines/`.
+
+- **The pipeline** (`distill-trace.js` → `generate-playwright.js`) reads the baseline and auto-generates a Playwright test. It extracts interaction steps (clicks, form fills, context menus), infers Playwright selectors from ARIA roles and accessible names, and inserts API response waiters to handle async timing. The generated test is ephemeral — created, run, and discarded on each invocation.
+
+- **The comparator** (`compare-traces.js`) diffs the baseline trace against the newly captured trace. It checks that the same API endpoints were called with the same methods, the same forms were submitted, and the same pages were navigated. Cosmetic differences (timing, extra GETs from polling) are ignored.
+
+**How to create a baseline:**
+
+#### 1. Perform the journey in the inspector
 
 Open the app with the XMLUI inspector, click through the journey yourself, export the trace JSON, and save it as a baseline. This is the standard workflow — it requires no tooling beyond the app itself and works for anyone. A human clicking at human speed also provides [opt-in chaos](#opt-in-chaos) — timing-dependent behavior that automated captures miss.
 
 See [Capturing a trace](#capturing-a-trace) for details.
 
-### 2. Describe the journey
+#### 2. Describe the journey
 
 With AI assistance, you can skip the clicking and just describe what the journey should do:
 
@@ -103,9 +119,20 @@ The AI generates a capture script, runs it, and the captured trace becomes the b
 
 ---
 
-Either way, once a baseline exists, `./test.sh run <name>` auto-generates a fresh Playwright test from it every time. Nobody writes or maintains Playwright code.
+**Why baseline mode is the default:** When auto-generated tests fall short, the fix is usually a small enhancement to the engine's `xsVerbose` tracing — for example, capturing modifier keys on click events or emitting ARIA metadata on table rows. Enriching the trace data fixes it for all apps and all future baselines, rather than requiring per-test Playwright workarounds. **If auto-generation can't handle a journey, please [open an issue](https://github.com/xmlui-org/trace-tools/issues)** — it likely points to a gap in the engine's tracing that should be fixed upstream.
 
-**If you find yourself needing to write Playwright, please [open an issue](https://github.com/xmlui-org/trace-tools/issues).** It should not be necessary. When auto-generated tests fall short, the fix is usually a small enhancement to the engine's `xsVerbose` tracing — for example, capturing modifier keys on click events or emitting toast messages to `_xsLogs`. Enriching the trace data fixes it for all apps and all future baselines, rather than requiring per-test Playwright workarounds.
+### Spec mode: hand-written Playwright tests
+
+For advanced scenarios where baseline mode isn't yet sufficient, you can write a Playwright spec by hand and place it in `traces/capture-scripts/<name>.spec.ts`. Run it with `./test.sh spec <name>` or run all specs with `./test.sh spec-all`.
+
+Hand-written specs can do things auto-generated tests currently cannot:
+
+- **Assert outcomes** — verify that a renamed file appears with its new name, that a toast shows the expected message, that a conflict resolution produced the right result.
+- **Validate dialog content** — check that error messages and confirmation dialogs contain the expected text, not just click through them.
+- **Handle complex conditional flows** — branch on dialog content (e.g. "is this a file conflict or a folder conflict?") with targeted recovery logic.
+- **Add targeted waits and retries** — insert explicit synchronization for flaky async operations like uploads or server-side conflict detection.
+
+Spec mode is useful when a QA engineer needs to verify specific business logic that goes beyond "did the journey complete without errors?" The long-term goal is to narrow this gap by teaching the generator to emit assertions from `state:changes` events in the trace — but spec mode is available now for cases that need it.
 
 ---
 
@@ -134,6 +161,74 @@ Make sure the app is running before running tests:
 
 - **Standalone apps**: start the app server (e.g. for core-ssh-server-ui, the app serves at `http://localhost:8123/ui/`)
 - **Dev-environment apps**: run `npm run dev` (serves at `http://localhost:5173` by default)
+
+## Directory layout
+
+### App repo: `traces/`
+
+Each app that uses trace-tools maintains a `traces/` directory in its own repo. This is the app's test suite — all checked in except for transient outputs.
+
+```
+your-app/
+├── test.sh                           # Defines reset_fixtures(), sources test-base.sh
+├── app-config.json                   # Base URL + auth config (if needed)
+│
+└── traces/
+    ├── baselines/                    # Baseline mode: reference traces
+    │   ├── rename-file.json          #   One JSON per recorded journey. ./test.sh run
+    │   ├── copy-paste.json           #   auto-generates a Playwright test from each,
+    │   └── ignore-apis.txt           #   replays it, and compares traces semantically.
+    │
+    ├── capture-scripts/              # Spec mode: hand-written Playwright tests
+    │   ├── navigation.spec.ts        #   One .spec.ts per test. ./test.sh spec <name>
+    │   ├── file-operations.spec.ts   #   runs it directly — no baseline needed.
+    │   └── upload-file.spec.ts       #   Use for assertions the generator can't yet emit.
+    │
+    ├── captures/                     # Output from baseline test runs (gitignored)
+    │   └── rename-file.json          #   Compared against baselines by compare-traces.js
+    │
+    ├── videos/                       # Recorded videos from --video runs (gitignored)
+    │   └── rename-file.webm          #   Playwright screen capture of each test run
+    │
+    └── fixtures/                     # Server filesystem state (checked in)
+        ├── shares/Documents/         #   Copied to the server's data directory before
+        │   ├── test.xlsx             #   each test run by reset_fixtures(). Tests expect
+        │   ├── foo/                  #   these files to exist — a test that right-clicks
+        │   │   ├── hello.txt         #   "test.xlsx" fails if it's not there.
+        │   │   └── bar/
+        │   └── pastebox/
+        └── <name>.pre.sh            #   Optional per-test hook: extra pre-conditions
+                                      #   beyond the base fixtures.
+```
+
+| Path | Checked in? | Purpose |
+|------|-------------|---------|
+| `test.sh` | Yes | App-level config + `source trace-tools/test-base.sh` |
+| `app-config.json` | Yes (if needed) | Base URL and auth configuration |
+| `traces/baselines/*.json` | Yes | Reference traces — the "known good" behavior |
+| `traces/baselines/ignore-apis.txt` | Yes (if needed) | APIs to exclude from semantic comparison |
+| `traces/capture-scripts/*.spec.ts` | Yes | Hand-written specs for advanced scenarios |
+| `traces/fixtures/` | Yes | Server filesystem state needed by tests |
+| `traces/fixtures/*.pre.sh` | Yes (if needed) | Per-test fixture hooks |
+| `traces/captures/*.json` | No | Output from baseline runs, compared against baselines |
+| `traces/videos/*.webm` | No | Recorded videos from `--video` runs |
+
+### Trace-tools (shared dependency)
+
+The app clones `trace-tools/` into its repo root as a subfolder (gitignored by the app). The app's `test.sh` sources `trace-tools/test-base.sh` to get the shared test commands.
+
+```
+your-app/
+└── trace-tools/                  # git clone https://github.com/xmlui-org/trace-tools
+    ├── test-base.sh              #   Shared test logic — sourced by app's test.sh
+    ├── generate-playwright.js    #   Baseline → Playwright test generator
+    ├── distill-trace.js          #   Raw trace → interaction steps
+    ├── compare-traces.js         #   Semantic diff (APIs, forms, navigation)
+    ├── playwright.config.ts      #   Reads app-config.json for baseURL + auth
+    └── xs-diff.html              #   Inspector viewer — copy to app's public/
+```
+
+Generated test files and captured traces inside `trace-tools/` are transient — created during a run and cleaned up afterward.
 
 ## Server state: the file tree your tests need
 
@@ -420,6 +515,24 @@ Prints a summary of a baseline trace — the number of steps, events, and which 
 ```
 Journey: 10 steps, 143 events
   APIs: GET /groups, GET /license, GET /settings, GET /status, GET /users, PUT /users/elvis
+```
+
+### `./test.sh spec <name>`
+
+Runs a hand-written Playwright spec from `traces/capture-scripts/<name>.spec.ts`. Resets fixtures first.
+
+```bash
+./test.sh spec paste-conflict-keep-both
+```
+
+No baseline is needed — the spec is the test. Use this for scenarios that require explicit assertions or complex conditional logic that the auto-generator doesn't yet handle. See [Spec mode](#spec-mode-hand-written-playwright-tests) for when this is appropriate.
+
+### `./test.sh spec-all`
+
+Runs every spec in `traces/capture-scripts/` and reports a summary.
+
+```bash
+./test.sh spec-all
 ```
 
 ## Video recording
@@ -788,49 +901,6 @@ The two app types differ in how they're served, whether they require auth, and h
 | XMLUI runtime | Checked-in JS bundle (e.g. `xmlui/0.12.1.js`) | Installed via npm, built by Vite |
 
 Either type may require auth. If it does, `app-config.json` describes the login flow (see [Auth configuration](#auth-configuration)). If not, omit the file. Auth is independent of how the app is served.
-
-## Directory layout
-
-```
-your-app/
-├── test.sh                         # Entry point — run this
-├── app-config.json                 # Auth + base URL config (only if needed)
-├── traces/
-│   ├── baselines/                  # Reference traces (checked in)
-│   │   ├── enable-disable-user.json
-│   │   └── ignore-apis.txt         # APIs to exclude from semantic comparison
-│   ├── captures/                   # Output from test runs (gitignored)
-│   │   └── enable-disable-user.json
-│   ├── videos/                     # Recorded videos from --video runs (gitignored)
-│   │   └── enable-disable-user.webm
-│   └── fixtures/                   # Server filesystem state (checked in)
-│       └── shares/Documents/       # Minimal files needed by baselines
-└── trace-tools/                    # Cloned dependency (gitignored)
-    ├── test-base.sh                # Shared test logic (sourced by app's test.sh)
-    ├── example-test.sh             # Minimal template for app's test.sh
-    ├── generate-playwright.js      # Generates .spec.ts from a baseline trace
-    ├── distill-trace.js            # Distills steps from raw trace
-    ├── compare-traces.js           # Semantic comparison (APIs, forms, nav)
-    ├── summarize.js                # Journey summary
-    ├── auth-setup.ts               # Playwright auth (reads app-config.json)
-    ├── playwright.config.ts        # Playwright config (reads app-config.json)
-    └── xs-diff.html                # Canonical inspector viewer (copied to app)
-```
-
-### What's checked in vs transient
-
-| File | Checked in? | Purpose |
-|------|-------------|---------|
-| `test.sh` | Yes | App-level config + `source trace-tools/test-base.sh` |
-| `app-config.json` | Yes (if needed) | Base URL and auth configuration |
-| `traces/baselines/*.json` | Yes | Reference traces — the "known good" behavior |
-| `traces/baselines/ignore-apis.txt` | Yes (if needed) | APIs to exclude from semantic comparison |
-| `traces/captures/*.json` | No | Output from test runs, compared against baselines |
-| `traces/videos/*.webm` | No | Recorded videos from `--video` runs |
-| `traces/fixtures/` | Yes | Server filesystem state needed by baselines |
-| `trace-tools/` | No | Cloned from github.com/xmlui-org/trace-tools |
-
-Generated test files and captured traces inside `trace-tools/` are transient — created during a run and cleaned up afterward.
 
 ## Inspector viewer (xs-diff.html)
 

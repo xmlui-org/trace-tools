@@ -186,16 +186,22 @@ case "${1:-help}" in
       bash "$HOOK"
     fi
 
-    # 3. Run the spec via the capture-scripts link
+    # 3. Copy spec into trace-tools root and run it.
+    #    Playwright doesn't traverse symlinked directories when discovering
+    #    test files, so we copy the spec next to the config (like `run` does
+    #    for generated specs) and clean up afterwards.
     echo ""
     echo "═══════════════════════════════════════════════════════════════"
     echo "                    SPEC TEST: $2"
     echo "═══════════════════════════════════════════════════════════════"
     echo ""
     cd "$TRACE_TOOLS"
+    SPEC_COPY="$TRACE_TOOLS/_spec-$2.spec.ts"
+    cp "$SPEC" "$SPEC_COPY"
     TEST_OUTPUT=$(mktemp)
-    npx playwright test "capture-scripts/$2.spec.ts" > "$TEST_OUTPUT" 2>&1
+    npx playwright test "_spec-$2.spec.ts" > "$TEST_OUTPUT" 2>&1
     TEST_EXIT=$?
+    rm -f "$SPEC_COPY"
 
     if [ $TEST_EXIT -eq 0 ]; then
       echo "PASS — Spec completed successfully"
