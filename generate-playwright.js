@@ -558,8 +558,8 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
     const stringFields = Object.entries(formData).filter(([, v]) => typeof v === 'string');
     for (const [fieldName, value] of stringFields) {
       if (!fillPlan.coveredFields?.has(fieldName)) {
-        // Use fieldName as textbox label (capitalize first letter for common patterns)
-        const textboxName = fieldName.charAt(0).toUpperCase() + fieldName.slice(1).replace(/([A-Z])/g, ' $1').trim();
+        // Use fieldName as textbox label (split camelCase, keeping acronyms like SSH/SFTP together)
+        const textboxName = fieldName.charAt(0).toUpperCase() + fieldName.slice(1).replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
         lines.push(`${indent}await page.getByRole('textbox', { name: '${textboxName}' }).fill('${String(value).replace(/'/g, "\\'")}');`);
       }
     }
