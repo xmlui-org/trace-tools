@@ -48,6 +48,22 @@ function resolveMethod(method, url) {
   return method;
 }
 
+/**
+ * Extract a display label from a DataSource item object.
+ * Tries common label field names first, then falls back to the first
+ * short string field. Returns null if no suitable label is found.
+ */
+function itemLabel(obj) {
+  if (!obj || typeof obj !== 'object') return null;
+  for (const key of ['name', 'title', 'label', 'displayName', 'username']) {
+    if (typeof obj[key] === 'string' && obj[key].length > 0) return obj[key];
+  }
+  for (const v of Object.values(obj)) {
+    if (typeof v === 'string' && v.length > 0 && v.length < 80) return v;
+  }
+  return null;
+}
+
 function distillTrace(traces) {
   const steps = [];
 
@@ -331,30 +347,32 @@ function distillJsonLogs(logs) {
     }
   }
 
-  // Diff consecutive DataSource:fileCatalogData snapshots to detect files
-  // added or removed by mutating operations. Only attach to steps that have
-  // mutating API calls (POST/PUT/DELETE/PATCH) — navigation-only folder
-  // changes are not assertion-worthy.
-  let prevFileSnapshot = null;
+  // Diff consecutive DataSource array snapshots to detect items added or
+  // removed by mutating operations. Only attach to steps that have mutating
+  // API calls (POST/PUT/DELETE/PATCH) — navigation-only changes are not
+  // assertion-worthy.
+  const prevSnapshots = {}; // DataSource path → [labels]
   for (const step of steps) {
-    if (step._fileCatalogSnapshot) {
-      if (prevFileSnapshot) {
-        const prevSet = new Set(prevFileSnapshot);
-        const currSet = new Set(step._fileCatalogSnapshot);
-        const added = step._fileCatalogSnapshot.filter(f => !prevSet.has(f));
-        const removed = prevFileSnapshot.filter(f => !currSet.has(f));
+    if (step._dataSourceSnapshots) {
+      const hasMutation = step.await?.api?.some(a =>
+        ['POST', 'PUT', 'DELETE', 'PATCH'].includes(a.method)
+      );
 
-        const hasMutation = step.await?.api?.some(a =>
-          ['POST', 'PUT', 'DELETE', 'PATCH'].includes(a.method)
-        );
+      for (const [dsPath, labels] of Object.entries(step._dataSourceSnapshots)) {
+        if (prevSnapshots[dsPath] && hasMutation) {
+          const prevSet = new Set(prevSnapshots[dsPath]);
+          const currSet = new Set(labels);
+          const added = labels.filter(l => !prevSet.has(l));
+          const removed = prevSnapshots[dsPath].filter(l => !currSet.has(l));
 
-        if (hasMutation && (added.length > 0 || removed.length > 0)) {
-          if (added.length > 0) step.filesAdded = added;
-          if (removed.length > 0) step.filesRemoved = removed;
+          if (added.length > 0 || removed.length > 0) {
+            if (!step.dataSourceChanges) step.dataSourceChanges = [];
+            step.dataSourceChanges.push({ source: dsPath, added, removed });
+          }
         }
+        prevSnapshots[dsPath] = labels;
       }
-      prevFileSnapshot = step._fileCatalogSnapshot;
-      delete step._fileCatalogSnapshot;
+      delete step._dataSourceSnapshots;
     }
   }
 
@@ -535,16 +553,18 @@ function extractStepFromJsonLogs(trace) {
     step.toasts = toasts;
   }
 
-  // Capture the latest DataSource file list snapshot for cross-step diffing.
+  // Capture DataSource array snapshots for cross-step diffing.
   // The caller (distillJsonLogs) will diff consecutive snapshots and attach
-  // filesAdded/filesRemoved to steps with mutating API calls.
-  const fileCatalogChanges = events
+  // dataSourceChanges to steps with mutating API calls.
+  const dsArrayChanges = events
     .filter(e => e.kind === 'state:changes' && e.diffJson)
     .flatMap(e => e.diffJson)
-    .filter(d => d.path === 'DataSource:fileCatalogData' && Array.isArray(d.after));
-  if (fileCatalogChanges.length > 0) {
-    const lastSnapshot = fileCatalogChanges[fileCatalogChanges.length - 1].after;
-    step._fileCatalogSnapshot = lastSnapshot.map(f => f.name).filter(Boolean);
+    .filter(d => d.path && d.path.startsWith('DataSource:') && Array.isArray(d.after));
+  if (dsArrayChanges.length > 0) {
+    if (!step._dataSourceSnapshots) step._dataSourceSnapshots = {};
+    for (const d of dsArrayChanges) {
+      step._dataSourceSnapshots[d.path] = d.after.map(itemLabel).filter(Boolean);
+    }
   }
 
   return step;
