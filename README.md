@@ -128,7 +128,7 @@ For advanced scenarios where baseline mode isn't yet sufficient, you can write a
 Auto-generated tests now include assertions derived from the trace data:
 
 - **Toast messages** — when the engine emits `kind: "toast"` events (requires engine build with toast tracing), the generator asserts toast text is visible: `await expect(page.getByText('Pasted 1 item(s), 1 skipped.')).toBeVisible()`. To add toast assertions to existing baselines: `./test.sh run <journey>` (re-captures with new engine), then `./test.sh update <journey>` (promotes capture to baseline).
-- **File list changes** — the generator diffs consecutive `DataSource:fileCatalogData` snapshots. After a mutating API call (paste, delete, rename), it asserts files that appeared (`toBeVisible`) or disappeared (`toHaveCount(0)`). No engine change needed — this data is already in traces. Just `./test.sh update <journey>` to promote existing captures.
+- **DataSource changes** — the generator diffs consecutive snapshots of any `DataSource:*` array. After a mutating API call (paste, delete, rename, create user, etc.), it asserts items that appeared (`toBeVisible`) or disappeared (`toHaveCount(0)`). No engine change needed — this data is already in traces. Just `./test.sh update <journey>` to promote existing captures. The label for each item is inferred by checking for `name`, `title`, `label`, `displayName`, or `username` fields, then falling back to the first short string field. If the heuristic picks the wrong field for your app, the generated assertion will fail with an obviously wrong selector — a future `traces/config.json` option will let you specify the label field per DataSource.
 
 Hand-written specs are still needed for:
 
