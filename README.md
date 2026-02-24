@@ -530,6 +530,27 @@ Promotes the latest capture to become the new baseline.
 
 Use this when the app's behavior has intentionally changed — a new API endpoint, a different form field, an added navigation step. The capture from the most recent `run` is copied to `traces/baselines/<journey>.json`, replacing the old baseline. Commit the updated baseline.
 
+### `./test.sh convert <name>`
+
+Converts a hand-written capture script into a generated baseline spec. This is the bridge between spec mode and baseline mode.
+
+```bash
+./test.sh convert share-internally
+```
+
+What happens under the hood:
+
+1. **Capture**: Runs `./test.sh spec <name>` to execute the manual spec and capture a trace
+2. **Save**: Copies the captured trace to `traces/baselines/<name>.json`
+3. **Generate**: Runs `generate-playwright.js` on the baseline to produce a Playwright spec
+4. **Output**: Saves the result as `traces/capture-scripts/generated_<name>.spec.ts`
+
+The generated spec can be compared against the manual spec to see what the auto-generator handles and what it misses — useful for identifying engine gaps (missing toast events, modal semantics, etc.) and for validating that generator improvements produce correct output.
+
+**`update` vs `convert`:** `update` accepts a *baseline run's* capture as the new truth (capture → baseline). `convert` turns a *manual spec* into a generated spec via the full pipeline (manual spec → trace → baseline → generated spec). Use `update` after `run` to accept changed behavior. Use `convert` after writing or improving a manual spec to see what the generator produces from it.
+
+Note: `convert` is defined in the app's `test.sh`, not in `test-base.sh`, because it calls `./test.sh spec` which routes through the app's own fixture reset. It could be moved to `test-base.sh` in the future since the logic is app-independent.
+
 ### `./test.sh compare <journey-name>`
 
 Runs the semantic comparison without running a test. Useful for comparing a previously captured trace against its baseline.
