@@ -38,7 +38,7 @@ function generatePlaywright(distilled, options = {}) {
   for (let si = 0; si < orderedSteps.length; si++) {
     const step = orderedSteps[si];
     lines.push('');
-    lines.push(...generateStepCode(step, fillPlan, responsePromiseCounter));
+    lines.push(...generateStepCode(step, fillPlan, responsePromiseCounter, si));
     // Increment counter by the number of deduplicated API promises used
     if (step.action !== 'startup' && step.await?.api?.length > 0) {
       const seenPaths = new Set();
@@ -80,6 +80,18 @@ function generatePlaywright(distilled, options = {}) {
             lines.push(`  await page.getByRole('${nt.ariaRole}', { name: '${nt.ariaName}', exact: true }).waitFor();`);
           }
         }
+      }
+    }
+
+    // After a step that triggers client-side navigation (e.g. Actions.navigate('?new=true'))
+    // but has no API calls, the DOM re-renders (e.g. a modal appears) without any network
+    // signal to wait on. Peek at the next step's target and emit a waitFor().
+    if (step.await?.navigate && (!step.await?.api?.length) && step.action !== 'startup' && si + 1 < orderedSteps.length) {
+      const next = orderedSteps[si + 1];
+      const nt = next?.target;
+      if (nt?.ariaRole && nt?.ariaName) {
+        const exact = !['textbox', 'textarea'].includes(nt.ariaRole);
+        lines.push(`  await page.getByRole('${nt.ariaRole}', { name: '${nt.ariaName}'${exact ? ', exact: true' : ''} }).waitFor();`);
       }
     }
 
@@ -417,7 +429,7 @@ function clickOptions(target, extra = {}) {
   return `{ ${parts.join(', ')} }`;
 }
 
-function generateStepCode(step, fillPlan, promiseCounter = 0) {
+function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0) {
   const lines = [];
   const indent = '  ';
 
@@ -433,8 +445,13 @@ function generateStepCode(step, fillPlan, promiseCounter = 0) {
   const isTreeContextMenu = step.action === 'contextmenu' && step.target?.ariaRole === 'treeitem';
   const apiAwaits = [];
   if (step.action !== 'startup' && step.await?.api?.length > 0 && !isTreeContextMenu) {
+    const hasMutation = step.await.api.some(a =>
+      ['POST', 'PUT', 'DELETE', 'PATCH'].includes(a.method));
     const seenPaths = new Set();
     for (const api of step.await.api) {
+      // When a step includes a mutating call, only await the mutation(s) —
+      // coincidental GETs (polling, refetches) are unreliable during replay.
+      if (hasMutation && !['POST', 'PUT', 'DELETE', 'PATCH'].includes(api.method)) continue;
       const path = extractEndpointPath(api.endpoint || api);
       if (path && !seenPaths.has(path)) {
         seenPaths.add(path);
@@ -442,11 +459,13 @@ function generateStepCode(step, fillPlan, promiseCounter = 0) {
       }
     }
     for (const { path, varName, method } of apiAwaits) {
+      // Encode spaces in endpoint paths so they match URL-encoded requests
+      const urlPath = path.replace(/ /g, '%20');
       const isMutating = method && ['POST', 'PUT', 'DELETE', 'PATCH'].includes(method);
       if (isMutating) {
-        lines.push(`${indent}const ${varName} = page.waitForResponse(r => r.url().includes('${path}') && r.request().method() === '${method}');`);
+        lines.push(`${indent}const ${varName} = page.waitForResponse(r => r.url().includes('${urlPath}') && r.request().method() === '${method}');`);
       } else {
-        lines.push(`${indent}const ${varName} = page.waitForResponse(r => r.url().includes('${path}'));`);
+        lines.push(`${indent}const ${varName} = page.waitForResponse(r => r.url().includes('${urlPath}'));`);
       }
     }
   }
@@ -475,6 +494,14 @@ function generateStepCode(step, fillPlan, promiseCounter = 0) {
         lines.pop();
         return [];
       }
+      // Skip clicks on unnamed structural roles (banner, navigation, etc.) — noise
+      // Only keep if there are mutating API calls (not just coincidental GETs)
+      if (step.target?.ariaRole && !step.target?.ariaName &&
+          ['banner', 'navigation', 'main', 'contentinfo', 'complementary'].includes(step.target.ariaRole) &&
+          !step.await?.api?.some(a => ['POST', 'PUT', 'DELETE', 'PATCH'].includes(a.method))) {
+        lines.pop();
+        return [];
+      }
       const clickLines = generateClickCode(step, indent, 'click', fillPlan);
       lines.push(...clickLines);
       if (clickLines._skipAwait) {
@@ -496,9 +523,18 @@ function generateStepCode(step, fillPlan, promiseCounter = 0) {
       // first keydown for each form interaction, skip subsequent ones.
       const kdAriaName = step.target?.ariaName;
       if (step.target?.ariaRole === 'textbox' && kdAriaName && fillPlan.fills?.has(kdAriaName)) {
-        const { value } = fillPlan.fills.get(kdAriaName);
+        // Track which ariaNames we've already filled so that subsequent keydowns
+        // for the same field (remaining keystrokes) are skipped. Reset when we
+        // encounter a new click on the same field (next form).
+        if (!fillPlan._filledInCurrentForm) fillPlan._filledInCurrentForm = new Set();
+        if (fillPlan._filledInCurrentForm.has(kdAriaName)) {
+          lines.pop();
+          return [];
+        }
+        const entry = fillPlan.fills.get(kdAriaName);
         fillPlan.fills.consume(kdAriaName);
-        lines.push(`${indent}await page.getByRole('textbox', { name: '${kdAriaName}' }).fill('${value.replace(/'/g, "\\'")}');`);
+        fillPlan._filledInCurrentForm.add(kdAriaName);
+        lines.push(`${indent}await page.getByRole('textbox', { name: '${kdAriaName}' }).fill('${entry.value.replace(/'/g, "\\'")}');`);
         return lines;
       }
       // Skip keydowns not covered by fill plan
@@ -579,6 +615,8 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
   if (ariaRole === 'textbox' && ariaName && fillPlan.fills?.has(ariaName)) {
     const { value } = fillPlan.fills.get(ariaName);
     fillPlan.fills.consume(ariaName);
+    if (!fillPlan._filledInCurrentForm) fillPlan._filledInCurrentForm = new Set();
+    fillPlan._filledInCurrentForm.add(ariaName);
     lines.push(`${indent}await page.getByRole('textbox', { name: '${ariaName}' }).fill('${value.replace(/'/g, "\\'")}');`);
     return lines;
   }
@@ -586,15 +624,18 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
   // Form submit button: fill any formData fields not already covered by textbox
   // interactions (e.g. when the trace comes from a Playwright capture that uses
   // .fill() instead of keydown events).
+  // Only emit uncovered fills when there were textbox interactions for THIS specific
+  // form submission (tracked via _filledInCurrentForm). If no fields were filled
+  // for this submit, it's a save-without-changes — skip synthesized fills.
+  // Clear the per-form fill tracker so the next form's fields can be filled.
   if (formData && typeof formData === 'object') {
-    const stringFields = Object.entries(formData).filter(([, v]) => typeof v === 'string');
-    for (const [fieldName, value] of stringFields) {
-      if (!fillPlan.coveredFields?.has(fieldName)) {
-        // Use fieldName as textbox label (capitalize first letter for common patterns)
-        const textboxName = fieldName.charAt(0).toUpperCase() + fieldName.slice(1).replace(/([A-Z])/g, ' $1').trim();
-        lines.push(`${indent}await page.getByRole('textbox', { name: '${textboxName}' }).fill('${String(value).replace(/'/g, "\\'")}');`);
-      }
-    }
+    const hadInteractions = fillPlan._filledInCurrentForm && fillPlan._filledInCurrentForm.size > 0;
+    if (fillPlan._filledInCurrentForm) fillPlan._filledInCurrentForm.clear();
+    // NOTE: Previously emitted fill() calls for uncovered formData fields using
+    // camelCase-derived labels, but these don't match actual UI labels reliably
+    // (e.g. "SFTPRootDir" → "SF T P Root Dir" vs actual "Default Root Directory:").
+    // Disabled until we have a reliable field-name-to-label mapping.
+    // Fields with textbox interactions are filled via the fill plan above.
   }
 
   // Checkbox in a table row: hover the row first to make the checkbox visible
@@ -637,7 +678,10 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
   // For rows, use .filter() with a cell matcher since a row's accessible name
   // is the concatenation of ALL cells (e.g. "foo 0 KiB 2024-01-01"), not just
   // the filename. A cell's accessible name IS its text, so exact matching works.
+  // For textbox/textarea, skip exact: XMLUI labels may include required indicators
+  // (e.g. "User Name:*") that aren't in the trace's ariaName.
   if (ariaRole && ariaName) {
+    const exact = !['textbox', 'textarea'].includes(ariaRole);
     if (ariaRole === 'row') {
       lines.push(`${indent}await ${rowLocator(ariaName)}${methodCall};`);
     } else if (ariaRole === 'treeitem' &&
@@ -649,7 +693,7 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
       lines.push(`${indent}await page.waitForTimeout(300);`);
       lines._skipAwait = true;
     } else {
-      lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}', exact: true })${methodCall};`);
+      lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}'${exact ? ', exact: true' : ''} })${methodCall};`);
     }
     return lines;
   }

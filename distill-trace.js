@@ -29,13 +29,27 @@ function resolveMethod(method, url) {
     if (url) {
       try {
         const urlObj = new URL(url, 'http://localhost');
-        if (urlObj.searchParams.get(paramName) === paramValue) {
-          return trueMethod.toUpperCase();
+        const paramVal = urlObj.searchParams.get(paramName);
+        // Only use the URL to resolve if the param is actually present;
+        // $queryParams refers to the page URL, not the API endpoint URL.
+        if (paramVal !== null) {
+          return (paramVal === paramValue ? trueMethod : falseMethod).toUpperCase();
         }
-        return falseMethod.toUpperCase();
       } catch (e) { /* fall through */ }
     }
-    // No URL context — return the "true" branch as default
+    // Param not in API URL — try heuristic: if the ternary checks for 'new'/'true'
+    // and the URL has a resource identifier (e.g. /api/users/elvis vs /api/users),
+    // the presence of an ID suggests edit (false branch), absence suggests create (true branch).
+    if (paramName === 'new' && paramValue === 'true' && url) {
+      // Count path segments after the base resource — if there's an ID, it's an edit
+      const pathParts = url.replace(/\?.*/, '').split('/').filter(Boolean);
+      // e.g. ['api', 'users', 'elvis'] has 3 parts vs ['api', 'users'] has 2
+      if (pathParts.length > 2) {
+        return falseMethod.toUpperCase(); // edit → put
+      }
+      return trueMethod.toUpperCase(); // create → post
+    }
+    // Generic fallback: return the first method from the expression
     return trueMethod.toUpperCase();
   }
 
@@ -488,6 +502,18 @@ function extractStepFromJsonLogs(trace) {
     // Capture form data for form submit handlers
     if (handlerStart.eventName === 'submit' && args) {
       target.formData = args;
+    }
+  }
+
+  // Fallback: if no submit handler emitted formData, check for a mutating API
+  // call with a body (the form data is in the request body).
+  if (!target.formData) {
+    const mutatingApi = events.find(e =>
+      e.kind === 'api:start' && e.body && typeof e.body === 'object' &&
+      ['POST', 'PUT', 'PATCH'].includes(resolveMethod(e.method, e.url)?.toUpperCase())
+    );
+    if (mutatingApi?.body) {
+      target.formData = mutatingApi.body;
     }
   }
 
