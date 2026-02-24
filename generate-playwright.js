@@ -147,6 +147,9 @@ function generatePlaywright(distilled, options = {}) {
 
     // Insert error collection before try, and try block after
     lines.splice(testStart + 1, 0, `
+  // Platform-aware modifier key (Meta on macOS, Control on Windows/Linux)
+  const _mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+
   // Collect XMLUI runtime errors (ErrorBoundary, script errors, toast messages)
   const _xsErrors: string[] = [];
   const _modalsSeen: string[] = [];
@@ -410,9 +413,8 @@ function rowLocator(ariaName) {
  */
 function clickOptions(target, extra = {}) {
   const modifiers = [];
-  if (target?.ctrlKey) modifiers.push("'Control'");
+  if (target?.ctrlKey || target?.metaKey) modifiers.push("_mod");
   if (target?.shiftKey) modifiers.push("'Shift'");
-  if (target?.metaKey) modifiers.push("'Meta'");
   if (target?.altKey) modifiers.push("'Alt'");
 
   const opts = { ...extra };
