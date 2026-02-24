@@ -483,7 +483,7 @@ function extractStepFromJsonLogs(trace) {
 
   // Extract label from interaction detail
   // But skip overly long labels (modal content) in favor of shorter text
-  if (interaction.detail?.text) {
+  if (interaction.detail?.text && !target.ariaName) {
     const text = interaction.detail.text;
     if (text.length < 50) {
       target.label = text;
