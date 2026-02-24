@@ -425,6 +425,67 @@ case "${1:-help}" in
     echo "Updated baseline: $2"
     ;;
 
+  convert)
+    if [ -z "$2" ]; then
+      echo "Usage: ./test.sh convert <spec-name>"
+      echo "  Converts traces/capture-scripts/<name>.spec.ts into a generated baseline spec"
+      exit 1
+    fi
+    NAME="$2"
+    SPEC="$CAPTURE_SCRIPTS/$NAME.spec.ts"
+    if [ ! -f "$SPEC" ]; then
+      echo "Capture script not found: $SPEC"
+      exit 1
+    fi
+
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  CONVERT: $NAME"
+    echo "  Step 1/3 — Running spec to capture trace"
+    echo "═══════════════════════════════════════════════════════════════"
+    "$0" spec "$NAME"
+    SPEC_EXIT=$?
+    if [ $SPEC_EXIT -ne 0 ]; then
+      echo "CONVERT FAILED — spec run failed"
+      exit $SPEC_EXIT
+    fi
+
+    TRACE_JSON="$TRACE_TOOLS/captured-trace.json"
+    if [ ! -f "$TRACE_JSON" ]; then
+      echo "CONVERT FAILED — captured-trace.json not found in $TRACE_TOOLS"
+      exit 1
+    fi
+
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  Step 2/3 — Saving baseline: $NAME"
+    echo "═══════════════════════════════════════════════════════════════"
+    mkdir -p "$BASELINES"
+    cp "$TRACE_JSON" "$BASELINES/$NAME.json"
+    echo "Saved baseline: $BASELINES/$NAME.json"
+
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  Step 3/3 — Generating spec from baseline"
+    echo "═══════════════════════════════════════════════════════════════"
+    ABS_BASELINE="$(cd "$BASELINES" && pwd)/$NAME.json"
+    OUT_SPEC="$CAPTURE_SCRIPTS/generated_$NAME.spec.ts"
+
+    node "$TRACE_TOOLS/generate-playwright.js" "$ABS_BASELINE" "$NAME" > "$OUT_SPEC"
+    if [ $? -ne 0 ] || [ ! -s "$OUT_SPEC" ]; then
+      echo "CONVERT FAILED — generate-playwright.js failed"
+      rm -f "$OUT_SPEC"
+      exit 1
+    fi
+
+    echo ""
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  CONVERT DONE"
+    echo "  Generated spec: traces/capture-scripts/generated_$NAME.spec.ts"
+    echo "═══════════════════════════════════════════════════════════════"
+    echo ""
+    ;;
+
   compare)
     if [ -z "$2" ]; then
       echo "Usage: ./test.sh compare <journey-name>"
@@ -462,6 +523,7 @@ case "${1:-help}" in
     echo "  run-all [--video]              Run all baselines"
     echo "  save <trace.json> <journey>    Save an exported trace as baseline"
     echo "  update <journey>               Promote latest capture to baseline"
+    echo "  convert <name>                 Convert manual spec → baseline → generated spec"
     echo "  compare <journey>              Compare latest capture vs baseline"
     echo "  summary <journey>              Show journey summary"
     echo ""

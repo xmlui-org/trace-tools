@@ -549,7 +549,6 @@ The generated spec can be compared against the manual spec to see what the auto-
 
 **`update` vs `convert`:** `update` accepts a *baseline run's* capture as the new truth (capture → baseline). `convert` turns a *manual spec* into a generated spec via the full pipeline (manual spec → trace → baseline → generated spec). Use `update` after `run` to accept changed behavior. Use `convert` after writing or improving a manual spec to see what the generator produces from it.
 
-Note: `convert` is defined in the app's `test.sh`, not in `test-base.sh`, because it calls `./test.sh spec` which routes through the app's own fixture reset. It could be moved to `test-base.sh` in the future since the logic is app-independent.
 
 ### `./test.sh compare <journey-name>`
 
