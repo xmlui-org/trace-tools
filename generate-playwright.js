@@ -37,8 +37,8 @@ function generatePlaywright(distilled, options = {}) {
   let responsePromiseCounter = 0;
   for (let si = 0; si < orderedSteps.length; si++) {
     const step = orderedSteps[si];
-    lines.push('');
-    lines.push(...generateStepCode(step, fillPlan, responsePromiseCounter, si));
+    const stepLines = [];
+    stepLines.push(...generateStepCode(step, fillPlan, responsePromiseCounter, si));
     // Increment counter by the number of deduplicated API promises used
     if (step.action !== 'startup' && step.await?.api?.length > 0) {
       const seenPaths = new Set();
@@ -65,19 +65,19 @@ function generatePlaywright(distilled, options = {}) {
         // but we also need a small delay to let React process the response.
         const refreshGet = step.await.api.find(a => a.method === 'GET');
         if (refreshGet) {
-          lines.push(`  await page.waitForTimeout(500);`);
+          stepLines.push(`  await page.waitForTimeout(500);`);
         }
         const next = orderedSteps[si + 1];
         const nt = next?.target;
         if (nt?.ariaRole && nt?.ariaName) {
           if (nt.ariaRole === 'row') {
-            lines.push(`  await ${rowLocator(nt.ariaName)}.waitFor();`);
+            stepLines.push(`  await ${rowLocator(nt.ariaName)}.waitFor();`);
           } else if (nt.ariaRole === 'button') {
             // Buttons may be disabled during state transitions (e.g. server restart);
             // wait for them to be enabled, not just present in the DOM.
-            lines.push(`  await expect(page.getByRole('button', { name: '${nt.ariaName}', exact: true })).toBeEnabled({ timeout: 15000 });`);
+            stepLines.push(`  await expect(page.getByRole('button', { name: '${nt.ariaName}', exact: true })).toBeEnabled({ timeout: 15000 });`);
           } else {
-            lines.push(`  await page.getByRole('${nt.ariaRole}', { name: '${nt.ariaName}', exact: true }).waitFor();`);
+            stepLines.push(`  await page.getByRole('${nt.ariaRole}', { name: '${nt.ariaName}', exact: true }).waitFor();`);
           }
         }
       }
@@ -91,25 +91,25 @@ function generatePlaywright(distilled, options = {}) {
       const nt = next?.target;
       if (nt?.ariaRole && nt?.ariaName) {
         const exact = !['textbox', 'textarea'].includes(nt.ariaRole);
-        lines.push(`  await page.getByRole('${nt.ariaRole}', { name: '${nt.ariaName}'${exact ? ', exact: true' : ''} }).waitFor();`);
+        stepLines.push(`  await page.getByRole('${nt.ariaRole}', { name: '${nt.ariaName}'${exact ? ', exact: true' : ''} }).waitFor();`);
       }
     }
 
     // After startup, install a modal observer to detect unexpected dialogs
     if (step.action === 'startup') {
-      lines.push('');
-      lines.push(`  // Monitor for modal dialogs (Conflict, error, etc.)`);
-      lines.push(`  await page.evaluate(() => {`);
-      lines.push(`    new MutationObserver(() => {`);
-      lines.push(`      document.querySelectorAll('[role="dialog"]').forEach(d => {`);
-      lines.push(`        if (d.getAttribute('data-modal-seen')) return;`);
-      lines.push(`        d.setAttribute('data-modal-seen', '1');`);
-      lines.push(`        const title = (d.querySelector('h2, h3, [class*="title"]') as HTMLElement)?.innerText || '';`);
-      lines.push(`        const body = (d as HTMLElement).innerText?.slice(0, 300) || '';`);
-      lines.push(`        console.log('__MODAL__:' + title + ' | ' + body);`);
-      lines.push(`      });`);
-      lines.push(`    }).observe(document.body, { childList: true, subtree: true });`);
-      lines.push(`  });`);
+      stepLines.push('');
+      stepLines.push(`  // Monitor for modal dialogs (Conflict, error, etc.)`);
+      stepLines.push(`  await page.evaluate(() => {`);
+      stepLines.push(`    new MutationObserver(() => {`);
+      stepLines.push(`      document.querySelectorAll('[role="dialog"]').forEach(d => {`);
+      stepLines.push(`        if (d.getAttribute('data-modal-seen')) return;`);
+      stepLines.push(`        d.setAttribute('data-modal-seen', '1');`);
+      stepLines.push(`        const title = (d.querySelector('h2, h3, [class*="title"]') as HTMLElement)?.innerText || '';`);
+      stepLines.push(`        const body = (d as HTMLElement).innerText?.slice(0, 300) || '';`);
+      stepLines.push(`        console.log('__MODAL__:' + title + ' | ' + body);`);
+      stepLines.push(`      });`);
+      stepLines.push(`    }).observe(document.body, { childList: true, subtree: true });`);
+      stepLines.push(`  });`);
     }
 
     // After startup, navigate to the starting page if it's not the root.
@@ -123,17 +123,36 @@ function generatePlaywright(distilled, options = {}) {
       startingPage.replace(/^\//, '').includes('/');
     if (step.action === 'startup' && needsNavigation) {
       const navLabel = startingPage.replace(/^\//, '').toUpperCase();
-      lines.push('');
-      lines.push(`  // Navigate to starting page (trace was captured on ${startingPage})`);
-      lines.push(`  await page.getByText('${navLabel}', { exact: true }).click();`);
+      stepLines.push('');
+      stepLines.push(`  // Navigate to starting page (trace was captured on ${startingPage})`);
+      stepLines.push(`  await page.getByText('${navLabel}', { exact: true }).click();`);
 
       // Wait for the first interaction's target element to confirm the page rendered
       const ft = firstInteraction?.target;
       if (ft?.ariaRole && ft?.ariaName) {
-        lines.push(`  await page.getByRole('${ft.ariaRole}', { name: '${ft.ariaName}' }).waitFor();`);
+        stepLines.push(`  await page.getByRole('${ft.ariaRole}', { name: '${ft.ariaName}' }).waitFor();`);
       } else if (ft?.label) {
-        lines.push(`  await page.getByText('${ft.label}', { exact: true }).waitFor();`);
+        stepLines.push(`  await page.getByText('${ft.label}', { exact: true }).waitFor();`);
       }
+    }
+
+    // Skip empty steps (noise filtered by generateStepCode)
+    if (stepLines.length === 0) continue;
+
+    // Wrap non-startup steps in test.step() for structured Playwright reporting
+    if (step.action === 'startup') {
+      lines.push('');
+      lines.push(...stepLines);
+    } else {
+      const label = stepLabel(step);
+      lines.push('');
+      // Remove the comment line (first line starts with "  //") — step label replaces it
+      const body = stepLines[0]?.trimStart().startsWith('//') ? stepLines.slice(1) : stepLines;
+      // Re-indent body lines by 2 extra spaces for the test.step() block
+      const indented = body.map(l => l === '' ? '' : '  ' + l);
+      lines.push(`  await test.step('${label}', async () => {`);
+      lines.push(...indented);
+      lines.push(`  });`);
     }
   }
 
@@ -395,6 +414,20 @@ function fieldMatchScore(fieldName, ariaName) {
     .reduce((sum, p) => sum + p.length, 0);
 
   return matchedLength;
+}
+
+/**
+ * Build a human-readable label for a test.step() block from a distilled step.
+ */
+function stepLabel(step) {
+  const name = step.target?.ariaName || step.target?.label || '';
+  switch (step.action) {
+    case 'startup': return 'startup';
+    case 'contextmenu': return name ? `right-click: ${name}` : 'right-click';
+    case 'dblclick': return name ? `double-click: ${name}` : 'double-click';
+    case 'toast': return 'toast';
+    default: return name ? `${step.action}: ${name}` : step.action;
+  }
 }
 
 /**
