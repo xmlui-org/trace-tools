@@ -415,6 +415,14 @@ function extractStepFromJsonLogs(trace) {
   }
 
   if (!interaction) {
+    // Toast-only trace groups (triggered by message handlers, not direct clicks)
+    const toastEvents = events.filter(e => e.kind === 'toast');
+    if (toastEvents.length > 0) {
+      return {
+        action: 'toast',
+        toasts: toastEvents.map(e => ({ type: e.toastType || 'default', message: e.message }))
+      };
+    }
     return null; // Skip non-interaction traces (message handlers, etc.)
   }
 

@@ -506,6 +506,13 @@ function generateStepCode(step, fillPlan, promiseCounter = 0) {
       return [];
     }
 
+    case 'toast':
+      for (const toast of step.toasts || []) {
+        const escaped = toast.message.replace(/'/g, "\\'");
+        lines.push(`${indent}await expect(page.locator('[role="status"]').filter({ hasText: '${escaped}' })).toBeVisible({ timeout: 5000 });`);
+      }
+      break;
+
     default:
       lines.push(`${indent}// TODO: handle action "${step.action}"`);
   }
@@ -531,10 +538,12 @@ function generateStepCode(step, fillPlan, promiseCounter = 0) {
   }
 
   // Assert toast notifications that appeared during this step
+  // Use [role="status"] selector because toast container has aria-hidden="true",
+  // making getByText unreliable when multiple toasts are visible simultaneously
   if (step.toasts?.length > 0) {
     for (const t of step.toasts) {
       const escaped = t.message.replace(/'/g, "\\'");
-      lines.push(`${indent}await expect(page.getByText('${escaped}')).toBeVisible({ timeout: 10000 });`);
+      lines.push(`${indent}await expect(page.locator('[role="status"]').filter({ hasText: '${escaped}' })).toBeVisible({ timeout: 5000 });`);
     }
   }
 
