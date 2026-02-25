@@ -2196,7 +2196,8 @@
           if (behavioral) {
             const parts = [behavioral.kind];
             if (behavioral.component) parts.push(behavioral.component);
-            if (behavioral.componentLabel) parts.push(`"${behavioral.componentLabel}"`);
+            if (behavioral.displayLabel) parts.push(`"${behavioral.displayLabel}"`);
+            else if (behavioral.componentLabel) parts.push(`"${behavioral.componentLabel}"`);
             componentText = parts.join(" ");
           }
         }
@@ -2532,10 +2533,20 @@
           if (e.kind === "handler:complete" && e.duration !== undefined) {
             eventTitle += ` (${e.duration.toFixed(1)}ms)`;
           }
+
+          // Build a descriptive label: prefer displayLabel (standard convention for behavioral events),
+          // fall back to componentLabel, then component name
+          let label = e.componentLabel ? `"${e.componentLabel}"` : "";
+          if (!label && e.displayLabel) {
+            label = (e.component ? e.component + " " : "") + `"${e.displayLabel}"`;
+          } else if (!label && e.component) {
+            label = e.component;
+          }
+
           events.push({
             entry: e, meta,
             eventTitle,
-            label: e.componentLabel ? `"${e.componentLabel}"` : "",
+            label,
           });
         });
 

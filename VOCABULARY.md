@@ -8,6 +8,12 @@ The XMLUI engine emits exactly these event kinds into `_xsLogs`. They fall into 
 
 When adding a new event kind to the engine, the question is: did a user or server cause it, or did the engine's internal rendering cause it? Behavioral events get preserved; rendering events get evicted.
 
+### The `displayLabel` convention
+
+Every behavioral event emitted by the engine should include a `displayLabel` field — a short, human-readable string that the inspector pretty view displays without needing to know the event's schema. The engine code that emits the event chooses what's informative (a tab name, a node name, an item count). The inspector just renders `displayLabel` — no per-kind field picking required. Other fields (tabIndex, selectedIds, expandedItems, etc.) remain for machine consumption by trace-tools.
+
+Examples: `displayLabel: "Settings"` (Tabs), `displayLabel: "Documents"` (Tree node), `displayLabel: "3 items"` (Table multi-select), `displayLabel: "Share"` (submenu).
+
 ## Event kinds
 
 | Kind | Preserved? | Consumed by trace-tools? | Category | Notes |
