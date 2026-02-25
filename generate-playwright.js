@@ -841,7 +841,7 @@ function generateModalCode(modals, indent) {
           lines.push(`${indent}  if (_dialogText.includes('File')) {`);
           if (cancels[0].action === 'cancel') {
             lines.push(`${indent}    // File conflict — skip`);
-            lines.push(`${indent}    await page.locator('[role="dialog"]').last().locator('button[aria-label="Close"]').click();`);
+            lines.push(`${indent}    await page.locator('[role="dialog"]').last().locator('button[aria-label="Close dialog"]').click();`);
           } else {
             const btn = cancels[0].buttonLabel || 'Cancel';
             lines.push(`${indent}    await page.getByRole('dialog').last().getByRole('button', { name: '${btn}', exact: true }).click();`);
@@ -880,8 +880,8 @@ function generateSingleModalCode(modal, indent) {
     lines.push(`${indent}await page.getByRole('button', { name: '${modal.buttonLabel}', exact: true }).waitFor();`);
     lines.push(`${indent}await page.getByRole('dialog').last().getByRole('button', { name: '${modal.buttonLabel}', exact: true }).click();`);
   } else if (modal.action === 'cancel') {
-    lines.push(`${indent}await page.locator('[role="dialog"]').last().locator('button[aria-label="Close"]').waitFor();`);
-    lines.push(`${indent}await page.locator('[role="dialog"]').last().locator('button[aria-label="Close"]').click();`);
+    lines.push(`${indent}await page.locator('[role="dialog"]').last().locator('button[aria-label="Close dialog"]').waitFor();`);
+    lines.push(`${indent}await page.locator('[role="dialog"]').last().locator('button[aria-label="Close dialog"]').click();`);
   } else if (modal.action === 'confirm' && modal.buttons?.length > 0) {
     const actionBtn = modal.buttons[modal.buttons.length - 1];
     lines.push(`${indent}await page.getByRole('button', { name: '${actionBtn.label}', exact: true }).waitFor();`);
