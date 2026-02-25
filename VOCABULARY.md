@@ -168,6 +168,26 @@ Everything *not* in that set is a **behavioral event** that the pretty view shou
 
 **What this means:** any future event kind added to the engine — `drag:start`, `upload:start`, `validation:error`, whatever — will automatically appear in the inspector pretty view without touching xs-diff.html. The infrastructure set is stable (it tracks the engine's rendering pipeline, which changes rarely); the behavioral set is open-ended and self-describing. This closes the loop: the verify step in the workflow above just works for any new kind, so the agent never gets stuck on a display gap.
 
+## Next: emit helper and startup noise suppression
+
+### `emitBehavioralEvent` helper
+
+The 8 emit sites across 6 engine files all copy-paste the same boilerplate: `typeof window !== "undefined"` guard, `Array.isArray(w._xsLogs)` check, `ts`, `perfTs`, `traceId` fields. This should be a single function:
+
+```tsx
+emitBehavioralEvent(kind: string, displayLabel: string, extras?: Record<string, any>)
+```
+
+The helper enforces the `displayLabel` convention — you can't call it without one. It also centralizes the guard logic so future emit sites are one-liners. This is the difference between a documented convention and an enforced one.
+
+### Startup noise suppression
+
+Both `selection:change` and `focus:change` fire spurious events on mount. For `selection:change`, we added a `selectedItems.length > 0` guard. For `focus:change`, the Tabs `onValueChange` fires on initial render when the default tab is set — need a similar guard to skip the emit when the value hasn't actually changed from the initial default.
+
+### `displayLabel` on existing behavioral events
+
+The `toast`, `modal:show`, `modal:confirm`, and `modal:cancel` events predate the `displayLabel` convention. They have dedicated renderers in the inspector so the gap is cosmetic today, but for uniform machine consumption (timeline views, log exports, trace diffs) they should carry `displayLabel` too: the toast message, the dialog title.
+
 ## Plan: config-driven preservation (not yet implemented)
 
 The current preserved set is hardcoded in `inspectorUtils.ts:splicePreservingInteractions()`. Every time trace-tools starts consuming a new event kind, someone has to open a PR on the engine to add it to the hardcoded `Set`. This is backwards — the consumer should declare what it needs, and the engine should read that declaration.
