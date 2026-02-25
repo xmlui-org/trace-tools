@@ -478,8 +478,13 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
   // For mutating methods (POST/PUT/DELETE/PATCH), include method in the filter
   // to avoid catching polling GET responses that share the same URL path.
   const isTreeContextMenu = step.action === 'contextmenu' && step.target?.ariaRole === 'treeitem';
+  // Tree toggle clicks (expand/collapse arrow) don't need API awaits — any ListFolder
+  // calls are coincidental (caching may or may not trigger them during replay).
+  const isTreeToggle = step.action === 'click' && step.target?.ariaRole === 'treeitem' &&
+    (step.target?.targetTag === 'svg' || step.target?.targetTag === 'polyline' ||
+     ((step.target?.targetTag === 'DIV' || step.target?.targetTag === 'SPAN') && !step.await?.api?.length));
   const apiAwaits = [];
-  if (step.action !== 'startup' && step.await?.api?.length > 0 && !isTreeContextMenu) {
+  if (step.action !== 'startup' && step.await?.api?.length > 0 && !isTreeContextMenu && !isTreeToggle) {
     const hasMutation = step.await.api.some(a =>
       ['POST', 'PUT', 'DELETE', 'PATCH'].includes(a.method));
     const seenPaths = new Set();
@@ -487,6 +492,9 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
       // When a step includes a mutating call, only await the mutation(s) —
       // coincidental GETs (polling, refetches) are unreliable during replay.
       if (hasMutation && !['POST', 'PUT', 'DELETE', 'PATCH'].includes(api.method)) continue;
+      // Menuitem clicks with no mutations are clipboard ops (Copy, Cut) —
+      // any GETs are coincidental tree navigation, not user-triggered.
+      if (!hasMutation && step.target?.ariaRole === 'menuitem') continue;
       const path = extractEndpointPath(api.endpoint || api);
       if (path && !seenPaths.has(path)) {
         seenPaths.add(path);
@@ -580,7 +588,7 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
     case 'toast':
       for (const toast of step.toasts || []) {
         const escaped = toast.message.replace(/'/g, "\\'");
-        lines.push(`${indent}await expect(page.locator('[role="status"]').filter({ hasText: '${escaped}' })).toBeVisible({ timeout: 5000 });`);
+        lines.push(`${indent}await expect(page.locator('[role="status"]').filter({ hasText: '${escaped}' }).first()).toBeVisible({ timeout: 5000 });`);
       }
       break;
 
@@ -603,8 +611,12 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
     lines.push(`${indent}await Promise.all([${apiAwaits.map(a => a.varName).join(', ')}]);`);
   }
 
-  // Add navigation await conditions (skip for startup - already handled inline)
-  if (step.await && step.action !== 'startup') {
+  // Add navigation await conditions (skip for startup - already handled inline,
+  // and skip for non-mutating menuitem clicks where navigation is coincidental
+  // e.g. Copy/Cut trigger tree selection which navigates, but that's not user-intended)
+  const isClipboardMenu = step.target?.ariaRole === 'menuitem' &&
+    !step.await?.api?.some(a => ['POST', 'PUT', 'DELETE', 'PATCH'].includes(a.method));
+  if (step.await && step.action !== 'startup' && !isClipboardMenu && !isTreeToggle) {
     lines.push(...generateNavigateAwaitCode(step.await, indent));
   }
 
@@ -614,7 +626,7 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
   if (step.toasts?.length > 0) {
     for (const t of step.toasts) {
       const escaped = t.message.replace(/'/g, "\\'");
-      lines.push(`${indent}await expect(page.locator('[role="status"]').filter({ hasText: '${escaped}' })).toBeVisible({ timeout: 5000 });`);
+      lines.push(`${indent}await expect(page.locator('[role="status"]').filter({ hasText: '${escaped}' }).first()).toBeVisible({ timeout: 5000 });`);
     }
   }
 
@@ -841,7 +853,7 @@ function generateModalCode(modals, indent) {
           lines.push(`${indent}  if (_dialogText.includes('File')) {`);
           if (cancels[0].action === 'cancel') {
             lines.push(`${indent}    // File conflict — skip`);
-            lines.push(`${indent}    await page.locator('[role="dialog"]').last().locator('button[aria-label="Close dialog"]').click();`);
+            lines.push(`${indent}    await page.locator('[role="dialog"]').last().locator('button[aria-label="Close dialog"]').click({ force: true });`);
           } else {
             const btn = cancels[0].buttonLabel || 'Cancel';
             lines.push(`${indent}    await page.getByRole('dialog').last().getByRole('button', { name: '${btn}', exact: true }).click();`);
@@ -881,7 +893,7 @@ function generateSingleModalCode(modal, indent) {
     lines.push(`${indent}await page.getByRole('dialog').last().getByRole('button', { name: '${modal.buttonLabel}', exact: true }).click();`);
   } else if (modal.action === 'cancel') {
     lines.push(`${indent}await page.locator('[role="dialog"]').last().locator('button[aria-label="Close dialog"]').waitFor();`);
-    lines.push(`${indent}await page.locator('[role="dialog"]').last().locator('button[aria-label="Close dialog"]').click();`);
+    lines.push(`${indent}await page.locator('[role="dialog"]').last().locator('button[aria-label="Close dialog"]').click({ force: true });`);
   } else if (modal.action === 'confirm' && modal.buttons?.length > 0) {
     const actionBtn = modal.buttons[modal.buttons.length - 1];
     lines.push(`${indent}await page.getByRole('button', { name: '${actionBtn.label}', exact: true }).waitFor();`);

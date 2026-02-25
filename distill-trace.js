@@ -369,10 +369,11 @@ function distillJsonLogs(logs) {
       const hasMutation = step.await?.api?.some(a =>
         ['POST', 'PUT', 'DELETE', 'PATCH'].includes(a.method)
       );
-      const hasNavigate = !!step.await?.navigate;
 
       for (const [dsPath, labels] of Object.entries(step._dataSourceSnapshots)) {
-        if (prevSnapshots[dsPath] && (hasMutation || hasNavigate)) {
+        // Only diff snapshots for mutation steps — navigation swaps the entire
+        // DataSource (different folder), so diffs are meaningless.
+        if (prevSnapshots[dsPath] && hasMutation) {
           const prevSet = new Set(prevSnapshots[dsPath]);
           const currSet = new Set(labels);
           const added = labels.filter(l => !prevSet.has(l));
