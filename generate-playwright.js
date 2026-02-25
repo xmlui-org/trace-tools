@@ -481,8 +481,7 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
   // Tree toggle clicks (expand/collapse arrow) don't need API awaits — any ListFolder
   // calls are coincidental (caching may or may not trigger them during replay).
   const isTreeToggle = step.action === 'click' && step.target?.ariaRole === 'treeitem' &&
-    (step.target?.targetTag === 'svg' || step.target?.targetTag === 'polyline' ||
-     ((step.target?.targetTag === 'DIV' || step.target?.targetTag === 'SPAN') && !step.await?.api?.length));
+    (step.target?.targetTag === 'svg' || step.target?.targetTag === 'polyline');
   const apiAwaits = [];
   if (step.action !== 'startup' && step.await?.api?.length > 0 && !isTreeContextMenu && !isTreeToggle) {
     const hasMutation = step.await.api.some(a =>
@@ -746,10 +745,10 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
     if (ariaRole === 'row') {
       lines.push(`${indent}await ${rowLocator(ariaName)}${methodCall};`);
     } else if (ariaRole === 'treeitem' &&
-               ((targetTag === 'svg' || targetTag === 'polyline') ||
-                ((targetTag === 'DIV' || targetTag === 'SPAN') && !step.await?.api?.length))) {
+               (targetTag === 'svg' || targetTag === 'polyline')) {
       // XMLUI TreeView: click was on the toggle arrow (expand/collapse), not the label.
-      // Detected by SVG/polyline targetTag, or DIV/SPAN with no API calls (pure visual toggle).
+      // Only svg/polyline targetTag is the arrow icon — DIV/SPAN clicks are label
+      // clicks that trigger navigation (even if no API/navigate in this trace group).
       lines.push(`${indent}await page.getByRole('treeitem', { name: '${ariaName}', exact: true }).locator('[class*="toggleWrapper"]')${methodCall};`);
       lines.push(`${indent}await page.waitForTimeout(300);`);
       lines._skipAwait = true;
