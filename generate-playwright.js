@@ -754,6 +754,11 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
       lines.push(`${indent}await page.waitForTimeout(300);`);
       lines._skipAwait = true;
     } else {
+      // If this menuitem click needs a submenu hover first, emit it
+      if (ariaRole === 'menuitem' && step.submenuParent) {
+        const parentEscaped = step.submenuParent.replace(/'/g, "\\'");
+        lines.push(`${indent}await page.getByRole('menuitem', { name: '${parentEscaped}', exact: true }).hover();`);
+      }
       lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}'${exact ? ', exact: true' : ''} })${methodCall};`);
     }
     return lines;

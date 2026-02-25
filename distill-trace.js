@@ -317,6 +317,12 @@ function distillJsonLogs(logs) {
     return [...active];
   }
 
+  // Collect submenu:open events globally (they often have no traceId since
+  // they fire between the contextmenu and click interactions).
+  const submenuOpensByTs = logs
+    .filter(e => e.kind === 'submenu:open')
+    .map(e => ({ ts: e.perfTs || e.ts, label: e.ariaName || e.componentLabel }));
+
   // Group logs by traceId
   const traces = new Map();
 
@@ -342,6 +348,7 @@ function distillJsonLogs(logs) {
   for (const trace of traceArray) {
     const step = extractStepFromJsonLogs(trace);
     if (step) {
+      step._firstPerfTs = trace.firstPerfTs;
       // If click/dblclick has no modifiers in its detail, infer from global timeline.
       // Table row clicks are captured in a separate traceId from the keydown event
       // for the modifier key (e.g. Ctrl), so we resolve via perfTs proximity.
@@ -388,6 +395,32 @@ function distillJsonLogs(logs) {
       }
       delete step._dataSourceSnapshots;
     }
+  }
+
+  // Propagate submenu parent: match submenu:open events (collected globally)
+  // to the next menuitem click step. submenu:open fires between the contextmenu
+  // and the click, so we match by finding the last submenu:open before each step's
+  // timestamp that hasn't been consumed yet.
+  if (submenuOpensByTs.length > 0) {
+    let subIdx = 0;
+    for (const step of steps) {
+      // Advance submenu index to the last one before this step
+      while (subIdx < submenuOpensByTs.length - 1 &&
+             submenuOpensByTs[subIdx + 1].ts < (step._firstPerfTs || Infinity)) {
+        subIdx++;
+      }
+      // If this step is a menuitem click and there's a submenu:open before it
+      if (step.target?.ariaRole === 'menuitem' && subIdx < submenuOpensByTs.length &&
+          submenuOpensByTs[subIdx].ts < (step._firstPerfTs || Infinity)) {
+        step.submenuParent = submenuOpensByTs[subIdx].label;
+        subIdx++; // consume it
+      }
+    }
+  }
+  // Clean up internal metadata
+  for (const step of steps) {
+    delete step._submenuOpens;
+    delete step._firstPerfTs;
   }
 
   // Dedupe: if we have click + click + dblclick on same target, keep only dblclick
@@ -585,6 +618,16 @@ function extractStepFromJsonLogs(trace) {
     .map(e => ({ type: e.toastType || 'default', message: e.message }));
   if (toasts.length > 0) {
     step.toasts = toasts;
+  }
+
+  // Capture submenu:open events — these fire during the contextmenu trace
+  // when the user hovers over a SubMenuItem. Post-processing will propagate
+  // the submenu parent to the next step (the actual menuitem click).
+  const submenuOpens = events
+    .filter(e => e.kind === 'submenu:open')
+    .map(e => e.ariaName || e.componentLabel);
+  if (submenuOpens.length > 0) {
+    step._submenuOpens = submenuOpens;
   }
 
   // Capture DataSource array snapshots for cross-step diffing.
