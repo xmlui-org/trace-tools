@@ -159,6 +159,8 @@ npx playwright install chromium
 cd ..
 cp trace-tools/example-test.sh test.sh    # customize, then source test-base.sh
 mkdir -p traces/baselines traces/runs
+cp trace-tools/xs-diff.html public/xs-diff.html
+cp ~/xmlui/xmlui/dist/inspector/xmlui-parser.es.js public/xmlui-parser.es.js
 ```
 
 Your app's `test.sh` defines app-specific configuration (like `reset_fixtures()`) and then sources the shared logic from `trace-tools/test-base.sh`. See `example-test.sh` for the minimal template. This means new features (like `--video`) are automatically available to all apps when trace-tools is updated — no need to copy changes into each app's `test.sh`.
@@ -883,6 +885,14 @@ The canonical copy lives in trace-tools. Each app copies it to its `public/` dir
 ```bash
 cp trace-tools/xs-diff.html public/xs-diff.html
 ```
+
+**Important:** `xs-diff.html` imports `xmlui-parser.es.js` (a standalone XMLUI parser module) via `<script type="module">`. This file must be in the same directory as `xs-diff.html`, or the inspector will silently fail to initialize — the iframe loads and shows buttons, but the module script never executes and no trace data is displayed. Copy it from the XMLUI build:
+
+```bash
+cp ~/xmlui/xmlui/dist/inspector/xmlui-parser.es.js public/xmlui-parser.es.js
+```
+
+Or from an existing app that already has it (e.g. `myWorkDrive-Client/public/` or `core-ssh-server-ui/`).
 
 When trace-tools updates xs-diff.html (e.g. new inspector features), downstream apps pull the update:
 
