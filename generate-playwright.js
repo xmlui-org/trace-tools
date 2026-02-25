@@ -755,7 +755,8 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
   // sticky submit buttons drop out of sticky position and clear any fixed
   // app header that overlaps them.
   if (ariaRole === 'button' && ariaName) {
-    lines.push(`${indent}await page.getByRole('button', { name: '${ariaName}', exact: true }).evaluate(node => {`);
+    const nthSuffix = step.target?.nthMatch !== undefined ? `.nth(${step.target.nthMatch})` : '';
+    lines.push(`${indent}await page.getByRole('button', { name: '${ariaName}', exact: true })${nthSuffix}.evaluate(node => {`);
     lines.push(`${indent}  let el = node.parentElement;`);
     lines.push(`${indent}  while (el && el !== document.documentElement) {`);
     lines.push(`${indent}    if (el.scrollHeight > el.clientHeight) { el.scrollTop = 0; break; }`);
@@ -763,7 +764,7 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
     lines.push(`${indent}  }`);
     lines.push(`${indent}  window.scrollTo(0, 0);`);
     lines.push(`${indent}});`);
-    lines.push(`${indent}await page.getByRole('button', { name: '${ariaName}', exact: true }).${method}();`);
+    lines.push(`${indent}await page.getByRole('button', { name: '${ariaName}', exact: true })${nthSuffix}.${method}();`);
     return lines;
   }
 
