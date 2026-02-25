@@ -661,18 +661,30 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
   // Form submit button: fill any formData fields not already covered by textbox
   // interactions (e.g. when the trace comes from a Playwright capture that uses
   // .fill() instead of keydown events).
-  // Only emit uncovered fills when there were textbox interactions for THIS specific
-  // form submission (tracked via _filledInCurrentForm). If no fields were filled
-  // for this submit, it's a save-without-changes — skip synthesized fills.
-  // Clear the per-form fill tracker so the next form's fields can be filled.
   if (formData && typeof formData === 'object') {
     const hadInteractions = fillPlan._filledInCurrentForm && fillPlan._filledInCurrentForm.size > 0;
     if (fillPlan._filledInCurrentForm) fillPlan._filledInCurrentForm.clear();
-    // NOTE: Previously emitted fill() calls for uncovered formData fields using
-    // camelCase-derived labels, but these don't match actual UI labels reliably
-    // (e.g. "SFTPRootDir" → "SF T P Root Dir" vs actual "Default Root Directory:").
-    // Disabled until we have a reliable field-name-to-label mapping.
-    // Fields with textbox interactions are filled via the fill plan above.
+
+    if (!hadInteractions) {
+      // No textbox keydown/click events preceded this submit — the spec used .fill()
+      // or the form was pre-filled and the user changed the value.
+      // Emit fill() calls using the form's testId to locate textboxes.
+      const testId = step.target?.testId;
+      const stringFields = Object.entries(formData).filter(([, v]) => typeof v === 'string');
+      if (testId && stringFields.length > 0) {
+        const formLocator = `page.locator('[data-testid="${testId}"]')`;
+        if (stringFields.length === 1) {
+          // Single field: target the textbox directly
+          const [, value] = stringFields[0];
+          lines.push(`${indent}await ${formLocator}.getByRole('textbox').fill('${value.replace(/'/g, "\\'")}');`);
+        } else {
+          // Multiple fields: use nth() matching formData key order
+          stringFields.forEach(([, value], idx) => {
+            lines.push(`${indent}await ${formLocator}.getByRole('textbox').nth(${idx}).fill('${value.replace(/'/g, "\\'")}');`);
+          });
+        }
+      }
+    }
   }
 
   // Checkbox in a table row: hover the row first to make the checkbox visible
