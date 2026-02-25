@@ -188,7 +188,8 @@ your-app/
     ├── baselines/                    # Baseline mode: reference traces
     │   ├── rename-file.json          #   One JSON per recorded journey. ./test.sh run
     │   ├── copy-paste.json           #   auto-generates a Playwright test from each,
-    │   └── ignore-apis.txt           #   replays it, and compares traces semantically.
+    │   ├── ignore-apis.txt           #   replays it, and compares traces semantically.
+    │   └── ignore-labels.txt          #   Labels to exclude from content assertions.
     │
     ├── specs/                        # Playwright test specs
     │   ├── navigation.spec.ts        #   One .spec.ts per test. ./test.sh spec <name>
@@ -218,6 +219,7 @@ your-app/
 | `app-config.json` | Yes (if needed) | Base URL and auth configuration |
 | `traces/baselines/*.json` | Yes | Reference traces — the "known good" behavior |
 | `traces/baselines/ignore-apis.txt` | Yes (if needed) | APIs to exclude from semantic comparison |
+| `traces/baselines/ignore-labels.txt` | Yes (if needed) | Labels to exclude from content assertions |
 | `traces/specs/*.spec.ts` | Yes | Playwright test specs (hand-written or generated) |
 | `traces/fixtures/` | Yes | Server filesystem state needed by tests |
 | `traces/fixtures/*.pre.sh` | Yes (if needed) | Per-test fixture hooks |
@@ -696,6 +698,20 @@ The `--ignore-api` flag can also be used directly with `compare-traces.js`:
 ```bash
 node compare-traces.js --semantic --ignore-api /license before.json after.json
 ```
+
+### Ignoring labels in content assertions
+
+The generator diffs consecutive DataSource snapshots to produce content assertions — `toBeVisible` for items that appeared, `toHaveCount(0)` for items that disappeared. Some items in API responses are hidden by the UI (e.g. `.gitkeep` files in a file manager). These cause false assertion failures.
+
+Create `traces/baselines/ignore-labels.txt` with one label per line:
+
+```
+# Labels to exclude from DataSource change assertions (one per line)
+# These items appear in API responses but are hidden by the UI
+.gitkeep
+```
+
+The generator reads this file and skips matching labels when emitting `toBeVisible` and `toHaveCount(0)` assertions. Like `ignore-apis.txt`, this file is app-specific — each app declares its own ignore list based on what its UI hides from the user.
 
 ## How selectors are generated
 
