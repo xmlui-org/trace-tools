@@ -58,7 +58,8 @@ function generatePlaywright(distilled, options = {}) {
       const hasMutation = step.await.api.some(a =>
         a.method === 'POST' || a.method === 'PUT' || a.method === 'DELETE'
       );
-      if (hasMutation && si + 1 < orderedSteps.length) {
+      const hadCancel = step.modals?.some(m => m.action === 'cancel');
+      if (hasMutation && !hadCancel && si + 1 < orderedSteps.length) {
         // If this step also has a GET after the mutation (e.g. ListFolder
         // refetch after paste/move), the table needs to re-render before we
         // can interact with the next element. The waitFor() below handles that,
@@ -94,6 +95,14 @@ function generatePlaywright(distilled, options = {}) {
         stepLines.push(`  await page.getByRole('${nt.ariaRole}', { name: '${nt.ariaName}'${exact ? ', exact: true' : ''} }).waitFor();`);
       }
     }
+
+    // After a tree toggle that triggers API calls (lazy-loading children),
+    // wait for the next step's target to appear. Without this, the next step
+    // may try to click a treeitem child that hasn't loaded yet.
+    const stepIsTreeToggle = step.action === 'click' && step.target?.ariaRole === 'treeitem' &&
+      (step.target?.targetTag === 'svg' || step.target?.targetTag === 'polyline');
+    // (Tree toggle peek-ahead removed — tree may cache children and not show
+    // new items on expand. Semantic comparison validates the operations independently.)
 
     // After startup, install a modal observer to detect unexpected dialogs
     if (step.action === 'startup') {
@@ -483,7 +492,10 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
   const isTreeToggle = step.action === 'click' && step.target?.ariaRole === 'treeitem' &&
     (step.target?.targetTag === 'svg' || step.target?.targetTag === 'polyline');
   const apiAwaits = [];
-  if (step.action !== 'startup' && step.await?.api?.length > 0 && !isTreeContextMenu && !isTreeToggle) {
+  // If a modal was cancelled, the mutation API call may never complete (aborted) —
+  // don't set up response promises that would hang forever.
+  const hadModalCancel = step.modals?.some(m => m.action === 'cancel');
+  if (step.action !== 'startup' && step.await?.api?.length > 0 && !isTreeContextMenu && !isTreeToggle && !hadModalCancel) {
     const hasMutation = step.await.api.some(a =>
       ['POST', 'PUT', 'DELETE', 'PATCH'].includes(a.method));
     const seenPaths = new Set();
@@ -621,8 +633,11 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
 
   // Assert toast notifications that appeared during this step
   // Use [role="status"] selector because toast container has aria-hidden="true",
-  // making getByText unreliable when multiple toasts are visible simultaneously
-  if (step.toasts?.length > 0) {
+  // making getByText unreliable when multiple toasts are visible simultaneously.
+  // Skip toast assertions when a modal was cancelled — the cancel may prevent the
+  // toast from appearing during replay (e.g. conflict skip → no "Pasted 0 items" toast).
+  const hadCancel = step.modals?.some(m => m.action === 'cancel');
+  if (step.toasts?.length > 0 && !hadCancel) {
     for (const t of step.toasts) {
       const escaped = t.message.replace(/'/g, "\\'");
       lines.push(`${indent}await expect(page.locator('[role="status"]').filter({ hasText: '${escaped}' }).first()).toBeVisible({ timeout: 5000 });`);
@@ -749,8 +764,23 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
       // XMLUI TreeView: click was on the toggle arrow (expand/collapse), not the label.
       // Only svg/polyline targetTag is the arrow icon — DIV/SPAN clicks are label
       // clicks that trigger navigation (even if no API/navigate in this trace group).
-      lines.push(`${indent}await page.getByRole('treeitem', { name: '${ariaName}', exact: true }).locator('[class*="toggleWrapper"]')${methodCall};`);
-      lines.push(`${indent}await page.waitForTimeout(300);`);
+      // Handle duplicate treeitems (e.g. 'foo' under Documents AND under pastebox).
+      // Prefer the aria-selected one (the folder we just navigated to), fall back to first().
+      // Ensure the node ends up expanded — navigation may auto-expand the tree path,
+      // so a blind toggle could collapse instead of expand. If that happens, toggle again.
+      lines.push(`${indent}{`);
+      lines.push(`${indent}  const _items = page.getByRole('treeitem', { name: '${ariaName}', exact: true });`);
+      lines.push(`${indent}  const _sel = _items.and(page.locator('[aria-selected="true"]'));`);
+      lines.push(`${indent}  const _target = await _sel.count() > 0 ? _sel : _items;`);
+      lines.push(`${indent}  if (await _target.count() > 0) {`);
+      lines.push(`${indent}    const _node = _target.first();`);
+      lines.push(`${indent}    await _node.locator('[class*="toggleWrapper"]')${methodCall};`);
+      lines.push(`${indent}    await page.waitForTimeout(300);`);
+      lines.push(`${indent}    if (await _node.getAttribute('aria-expanded') !== 'true') {`);
+      lines.push(`${indent}      await _node.locator('[class*="toggleWrapper"]')${methodCall};`);
+      lines.push(`${indent}    }`);
+      lines.push(`${indent}  }`);
+      lines.push(`${indent}}`);
       lines._skipAwait = true;
     } else {
       // If this menuitem click needs a submenu hover first, emit it
@@ -857,7 +887,7 @@ function generateModalCode(modals, indent) {
           lines.push(`${indent}  if (_dialogText.includes('File')) {`);
           if (cancels[0].action === 'cancel') {
             lines.push(`${indent}    // File conflict — skip`);
-            lines.push(`${indent}    await page.locator('[role="dialog"]').last().locator('button[aria-label="Close dialog"]').click({ force: true });`);
+            lines.push(`${indent}    await page.getByRole('dialog').last().getByRole('button', { name: 'Cancel', exact: true }).click();`);
           } else {
             const btn = cancels[0].buttonLabel || 'Cancel';
             lines.push(`${indent}    await page.getByRole('dialog').last().getByRole('button', { name: '${btn}', exact: true }).click();`);
@@ -896,8 +926,11 @@ function generateSingleModalCode(modal, indent) {
     lines.push(`${indent}await page.getByRole('button', { name: '${modal.buttonLabel}', exact: true }).waitFor();`);
     lines.push(`${indent}await page.getByRole('dialog').last().getByRole('button', { name: '${modal.buttonLabel}', exact: true }).click();`);
   } else if (modal.action === 'cancel') {
-    lines.push(`${indent}await page.locator('[role="dialog"]').last().locator('button[aria-label="Close dialog"]').waitFor();`);
-    lines.push(`${indent}await page.locator('[role="dialog"]').last().locator('button[aria-label="Close dialog"]').click({ force: true });`);
+    // Prefer the explicit Cancel button over the X (Close dialog) — more reliable
+    // and doesn't need { force: true } to bypass overlay interception.
+    lines.push(`${indent}await page.getByRole('dialog').last().getByRole('button', { name: 'Cancel', exact: true }).waitFor();`);
+    lines.push(`${indent}await page.getByRole('dialog').last().getByRole('button', { name: 'Cancel', exact: true }).click();`);
+    lines.push(`${indent}await page.waitForTimeout(500);`);
   } else if (modal.action === 'confirm' && modal.buttons?.length > 0) {
     const actionBtn = modal.buttons[modal.buttons.length - 1];
     lines.push(`${indent}await page.getByRole('button', { name: '${actionBtn.label}', exact: true }).waitFor();`);

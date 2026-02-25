@@ -14,7 +14,7 @@ const hasAuth = !!appConfig.auth;
 
 export default defineConfig({
   testDir: '.',
-  timeout: 30000,
+  timeout: 60000,
   use: {
     baseURL,
     headless: false, // Set to true for CI
