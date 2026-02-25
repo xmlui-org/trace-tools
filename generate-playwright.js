@@ -389,6 +389,17 @@ function buildFillPlan(steps) {
     }
   }
 
+  // Track which forms (by testId) have ANY textbox interactions in the journey.
+  // If a form has textbox interactions for some submits but not others, the submits
+  // without interactions are "save current state" — no fill needed.
+  const formsWithTextboxInteractions = new Set();
+  for (const step of steps) {
+    if ((step.action === 'click' || step.action === 'keydown') &&
+        step.target?.ariaRole === 'textbox' && step.target?.testId) {
+      formsWithTextboxInteractions.add(step.target.testId);
+    }
+  }
+
   // Convert queues to a Map-like interface: fills.get(ariaName) returns next value
   const fills = {
     has(ariaName) { return fillQueues.has(ariaName) && fillQueues.get(ariaName).length > 0; },
@@ -396,7 +407,7 @@ function buildFillPlan(steps) {
     consume(ariaName) { const q = fillQueues.get(ariaName); if (q) q.shift(); }
   };
 
-  return { fills, coveredFields };
+  return { fills, coveredFields, formsWithTextboxInteractions };
 }
 
 /**
@@ -691,8 +702,8 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
     const hadInteractions = fillPlan._filledInCurrentForm && fillPlan._filledInCurrentForm.size > 0;
     if (fillPlan._filledInCurrentForm) fillPlan._filledInCurrentForm.clear();
 
-    if (!hadInteractions) {
-      // No textbox keydown/click events preceded this submit — the spec used .fill()
+    if (!hadInteractions && !fillPlan.formsWithTextboxInteractions?.has(step.target?.testId)) {
+      // No textbox interactions at all for this form — the spec used .fill()
       // or the form was pre-filled and the user changed the value.
       // Emit fill() calls using the form's testId to locate textboxes.
       const testId = step.target?.testId;
@@ -704,10 +715,17 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
           const [, value] = stringFields[0];
           lines.push(`${indent}await ${formLocator}.getByRole('textbox').fill('${value.replace(/'/g, "\\'")}');`);
         } else {
-          // Multiple fields: use nth() matching formData key order
-          stringFields.forEach(([, value], idx) => {
-            lines.push(`${indent}await ${formLocator}.getByRole('textbox').nth(${idx}).fill('${value.replace(/'/g, "\\'")}');`);
-          });
+          // Multiple fields: fill by runtime textbox count.
+          // Some fields may be disabled/hidden (e.g. conditional form items),
+          // so nth() indices from formData may not match visible textboxes.
+          const values = stringFields.map(([, v]) => v.replace(/'/g, "\\'"));
+          lines.push(`${indent}{`);
+          lines.push(`${indent}  const _values = [${values.map(v => `'${v}'`).join(', ')}];`);
+          lines.push(`${indent}  const _count = await ${formLocator}.getByRole('textbox').count();`);
+          lines.push(`${indent}  for (let _i = 0; _i < Math.min(_count, _values.length); _i++) {`);
+          lines.push(`${indent}    await ${formLocator}.getByRole('textbox').nth(_i).fill(_values[_i]);`);
+          lines.push(`${indent}  }`);
+          lines.push(`${indent}}`);
         }
       }
     }
