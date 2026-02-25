@@ -25,6 +25,8 @@ When adding a new event kind to the engine, the question is: did a user or serve
 | `modal:cancel` | Yes | Yes (distiller, comparator) | Behavioral | User cancels dialog |
 | `toast` | Yes | Yes (distiller) | Behavioral | Toast notification shown |
 | `submenu:open` | Yes | Yes (distiller) | Behavioral | Context menu submenu opened |
+| `selection:change` | Yes | Not yet | Behavioral | Table/Tree row selection changed — emits selectedItems |
+| `focus:change` | Yes | Not yet | Behavioral | Tab switch, Accordion expand, NavGroup toggle |
 | `emitEvent` | No | No | Behavioral | Compound component custom event — not yet consumed |
 | `error:boundary` | No | No | Behavioral | React ErrorBoundary catch — not yet consumed |
 | `error:runtime` | No | No | Behavioral | Runtime error — not yet consumed |
@@ -48,10 +50,10 @@ These don't exist yet but are predicted from XMLUI's component and interaction m
 
 ### Selection and focus
 
-| Predicted kind | Trigger | Why trace-tools will need it |
-|---------------|---------|------------------------------|
-| `selection:change` | Table `selectionDidChange`, Tree `selectionDidChange`, List selection | Generator needs to replay row/node selection for journeys that branch on what's selected. Currently inferred from `interaction` clicks but not explicitly tracked — multi-select with Shift/Ctrl is especially fragile. |
-| `focus:change` | Tab switch (Tabs `activeTab`), Accordion expand, NavGroup toggle | Generator needs to know which tab/section is active. Currently invisible in traces — a tab switch produces no event unless it triggers an API call. |
+| Predicted kind | Status | Trigger | Why trace-tools will need it |
+|---------------|--------|---------|------------------------------|
+| `selection:change` | **Implemented** | Table `selectionDidChange`, Tree `selectionDidChange` | Generator needs to replay row/node selection for journeys that branch on what's selected. Emits `selectedItems` array with id/name. Added guard to suppress empty-selection events on mount. |
+| `focus:change` | **Implemented** | Tab switch (Tabs `onValueChange`), Accordion expand, NavGroup toggle | Generator needs to know which tab/section is active. Emits `tabIndex`/`tabLabel` for Tabs, `expandedItems` for Accordion, `label`/`expanded` for NavGroup. |
 
 ### Drag and drop
 
@@ -116,7 +118,7 @@ From `inspectorUtils.ts:splicePreservingInteractions()`:
 ```
 interaction, navigate, api:start, api:complete, api:error,
 handler:start, handler:complete, modal:show, modal:confirm,
-modal:cancel, toast, submenu:open
+modal:cancel, toast, submenu:open, selection:change, focus:change
 ```
 
 ## Consumed set (trace-tools)
@@ -128,6 +130,37 @@ interaction, navigate, api:start, api:complete, api:error,
 handler:start, modal:show, modal:confirm, modal:cancel,
 toast, submenu:open, state:changes, component:vars:init
 ```
+
+## MCP-informed test apps: systematic engine extension
+
+We proved a workflow for extending the engine's trace vocabulary that can scale to cover the full XMLUI surface area:
+
+1. **Consult this vocabulary** to identify the next predicted event kind (e.g. `focus:change`)
+2. **Ask xmlui-mcp** for the component docs and source — learn the API surface, find the hook points (onValueChange, onOpenChange, etc.)
+3. **Build a minimal standalone app** in `apps/` that exercises the relevant components (Tabs, Accordion, NavGroup for focus:change; Table, Tree for selection:change)
+4. **Apply the engine change** — emit the new event kind from the component's direct event handler (not useEffect — learned the hard way with selection:change firing on mount)
+5. **Verify with the inspector** — the self-describing pretty view (see below) displays the new event kind automatically, no renderer changes needed
+6. **Iterate** — if the event shape is wrong or noisy, the standalone app gives immediate feedback without touching the real app
+
+Each standalone app is tiny (~30 lines of XMLUI) and targets one capability from the predicted kinds table. The apps accumulate in `apps/` as a living test suite for the trace vocabulary itself. An AI agent with access to xmlui-mcp can execute this workflow autonomously: read VOCABULARY.md for what's next, query xmlui-mcp for component APIs and source, generate the app and engine patch, verify the result. The predicted kinds table above is the backlog; the standalone apps are the proof.
+
+This makes it feasible to systematically cover every behavioral event in XMLUI's component model — not by hand-writing each one, but by driving an informed loop: vocabulary → MCP → app → engine → verify.
+
+### Self-describing inspector: the display fix that enables the loop
+
+When we added `selection:change` and `focus:change` to the engine, the inspector's pretty view silently dropped them. The root cause: `renderPrettyView` in `xs-diff.html` decides whether a trace group has "content" worth showing based on `changeCount > 0 || hasError || startCount > 0` — counting only state diffs, errors, and handler:start events. A trace with only behavioral events like `focus:change` had zero content by that definition and was filtered out.
+
+The fix avoids the "add a renderer for each new kind" trap. Instead, we defined an **infrastructure set** — the kinds that are part of the engine's internal machinery:
+
+```
+interaction, handler:start, handler:complete, handler:error,
+state:changes, component:vars:init, component:vars:change,
+api:start, api:complete, api:error, navigate
+```
+
+Everything *not* in that set is a **behavioral event** that the pretty view should display. The `hasContent` check now includes `behavioralEventCount > 0`, and a `componentText` fallback derives a trace title from the first behavioral event's kind + component (e.g. "focus:change Tabs").
+
+**What this means:** any future event kind added to the engine — `drag:start`, `upload:start`, `validation:error`, whatever — will automatically appear in the inspector pretty view without touching xs-diff.html. The infrastructure set is stable (it tracks the engine's rendering pipeline, which changes rarely); the behavioral set is open-ended and self-describing. This closes the loop: the verify step in the workflow above just works for any new kind, so the agent never gets stuck on a display gap.
 
 ## Plan: config-driven preservation (not yet implemented)
 

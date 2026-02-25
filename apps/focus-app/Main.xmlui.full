@@ -1,0 +1,89 @@
+<App name="Focus Test App">
+
+  <AppHeader>
+    <Icon name="cog" width="20px" height="20px" onClick="inspectorDialog.open()" />
+  </AppHeader>
+
+  <NavPanel>
+    <NavLink label="Tabs" to="/" />
+    <NavLink label="Accordion" to="/accordion" />
+    <NavGroup label="Grouped Links" initiallyExpanded="true">
+      <NavLink label="Sub Page A" to="/sub-a" />
+      <NavLink label="Sub Page B" to="/sub-b" />
+    </NavGroup>
+  </NavPanel>
+
+  <Pages>
+
+    <Page url="/">
+      <VStack padding="$space-4" gap="$space-4">
+
+        <Heading level="h2" value="Standard Tabs" />
+        <Tabs testId="standard-tabs" onDidChange="(idx, id, label) => {}">
+          <TabItem label="Profile">
+            <Text>Profile content - edit your name and avatar.</Text>
+          </TabItem>
+          <TabItem label="Settings">
+            <Text>Settings content - notification preferences.</Text>
+          </TabItem>
+          <TabItem label="Billing">
+            <Text>Billing content - payment methods and invoices.</Text>
+          </TabItem>
+        </Tabs>
+
+        <Heading level="h2" value="Accordion Tabs" />
+        <Tabs testId="accordion-tabs" accordionView="true" onDidChange="(idx, id, label) => {}">
+          <TabItem label="Overview">
+            <Text>Dashboard overview with key metrics.</Text>
+          </TabItem>
+          <TabItem label="Details">
+            <Text>Detailed breakdown of activity.</Text>
+          </TabItem>
+          <TabItem label="History">
+            <Text>Historical data and trends.</Text>
+          </TabItem>
+        </Tabs>
+
+      </VStack>
+    </Page>
+
+    <Page url="/accordion">
+      <VStack padding="$space-4" gap="$space-4">
+
+        <Heading level="h2" value="Accordion" />
+        <Accordion testId="test-accordion">
+          <AccordionItem header="Section A">
+            <Text>Content for section A.</Text>
+          </AccordionItem>
+          <AccordionItem header="Section B">
+            <Text>Content for section B.</Text>
+          </AccordionItem>
+          <AccordionItem header="Section C">
+            <Text>Content for section C.</Text>
+          </AccordionItem>
+        </Accordion>
+
+      </VStack>
+    </Page>
+
+    <Page url="/sub-a">
+      <VStack padding="$space-4">
+        <Heading level="h2" value="Sub Page A" />
+        <Text>Reached via NavGroup → Sub Page A.</Text>
+      </VStack>
+    </Page>
+
+    <Page url="/sub-b">
+      <VStack padding="$space-4">
+        <Heading level="h2" value="Sub Page B" />
+        <Text>Reached via NavGroup → Sub Page B.</Text>
+      </VStack>
+    </Page>
+
+  </Pages>
+
+  <ModalDialog id="inspectorDialog" title="XMLUI Inspector" minWidth="85vw" minHeight="85vh">
+    <IFrame src="xs-diff.html" width="100%" height="80vh" />
+  </ModalDialog>
+
+</App>

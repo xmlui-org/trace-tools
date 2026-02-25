@@ -2185,7 +2185,33 @@
           if (nav) componentText = "Navigation";
         }
 
+        // Fallback: derive title from first behavioral event (focus:change, selection:change, etc.)
+        if (!componentText) {
+          const infrastructureForTitle = new Set([
+            "interaction", "handler:start", "handler:complete", "handler:error",
+            "state:changes", "component:vars:init", "component:vars:change",
+            "api:start", "api:complete", "api:error", "navigate",
+          ]);
+          const behavioral = traceEntries.find((e) => !infrastructureForTitle.has(e.kind));
+          if (behavioral) {
+            const parts = [behavioral.kind];
+            if (behavioral.component) parts.push(behavioral.component);
+            if (behavioral.componentLabel) parts.push(`"${behavioral.componentLabel}"`);
+            componentText = parts.join(" ");
+          }
+        }
+
         const changeCount = stateChanges.reduce((acc, e) => acc + (e.diffJson ? e.diffJson.length : 0), 0);
+
+        // Count behavioral events — any kind not part of the handler/state/vars infrastructure.
+        // This ensures new event kinds (focus:change, selection:change, etc.) are treated as content.
+        const infrastructureKinds = new Set([
+          "interaction", "handler:start", "handler:complete", "handler:error",
+          "state:changes", "component:vars:init", "component:vars:change",
+          "api:start", "api:complete", "api:error", "navigate",
+        ]);
+        const behavioralEventCount = traceEntries.filter((e) => !infrastructureKinds.has(e.kind)).length;
+
         const handlerNames = starts.map((s) => s.eventName || "unknown");
 
         // Calculate trace duration from perfTs
@@ -2347,6 +2373,7 @@
         return {
           componentText: componentText || "Unknown trace",
           changeCount,
+          behavioralEventCount,
           hasError: !!error,
           multipleStarts: handlerNames.length > 1,
           handlerNames,
@@ -3165,7 +3192,7 @@
           if (item.type === "trace") {
             // Skip traces with no meaningful content (but keep startup traces and traces with handlers)
             const isStartup = item.traceId && item.traceId.startsWith("startup-");
-            const hasContent = item.summary.changeCount > 0 || item.summary.hasError || item.summary.startCount > 0;
+            const hasContent = item.summary.changeCount > 0 || item.summary.hasError || item.summary.startCount > 0 || item.summary.behavioralEventCount > 0;
             if (!hasContent && !isStartup) return;
 
             if (!currentGroup) {
@@ -3226,7 +3253,7 @@
           } else if (item.type === "trace") {
             // Should not happen after grouping, but handle just in case
             const isStartup = item.traceId && item.traceId.startsWith("startup-");
-            const hasContent = item.summary.changeCount > 0 || item.summary.hasError || item.summary.startCount > 0;
+            const hasContent = item.summary.changeCount > 0 || item.summary.hasError || item.summary.startCount > 0 || item.summary.behavioralEventCount > 0;
             if (!hasContent && !isStartup) return;
             blocks.push(renderTraceGroupPretty(item));
           } else if (item.type === "interaction") {
@@ -3929,7 +3956,7 @@
           if (item.type === "trace") {
             // Skip traces with no meaningful content (but keep startup traces and traces with handlers)
             const isStartup = item.traceId && item.traceId.startsWith("startup-");
-            const hasContent = item.summary.changeCount > 0 || item.summary.hasError || item.summary.startCount > 0;
+            const hasContent = item.summary.changeCount > 0 || item.summary.hasError || item.summary.startCount > 0 || item.summary.behavioralEventCount > 0;
             if (!hasContent && !isStartup) return;
             traceIndex++;
             lines.push(...renderTraceRaw(item, traceIndex));
