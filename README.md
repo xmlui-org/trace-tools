@@ -5,8 +5,8 @@
 - [Overview](#overview)
 - [The XMLUI inspector and xs-diff.html](#the-xmlui-inspector-and-xs-diffhtml)
 - [Regression testing](#regression-testing)
-  - [Baseline mode: record, replay, compare](#baseline-mode-record-replay-compare)
-  - [Spec mode: hand-written Playwright tests](#spec-mode-hand-written-playwright-tests)
+  - [`run` — baseline mode: record, replay, compare](#run--baseline-mode-record-replay-compare)
+  - [`spec` — hand-written Playwright tests](#spec--hand-written-playwright-tests)
 - [Setup](#setup)
 - [Directory layout](#directory-layout)
 - [Server state: the file tree your tests need](#server-state-the-file-tree-your-tests-need)
@@ -81,15 +81,19 @@ Then navigate to `/xs-diff.html` in the running app.
 
 ## Regression testing
 
-Trace-tools provides two ways to test XMLUI apps: **baseline mode** (the primary workflow) and **spec mode** (for advanced cases that need hand-written assertions).
+Trace-tools provides two complementary ways to test XMLUI apps: **`run`** (baseline-driven, auto-generated) and **`spec`** (hand-written Playwright). They serve different purposes and both contribute to the test suite.
 
-### Baseline mode: record, replay, compare
+### `run` — baseline mode: record, replay, compare
 
-The core idea: nobody writes Playwright. You record a user journey, save its trace as a baseline, and `./test.sh run <name>` auto-generates a fresh Playwright test from it every time. The pipeline captures a new trace during replay and compares it semantically against the baseline — same APIs, same forms, same navigation means the app's behavior is unchanged.
+**Purpose:** Catch behavioral regressions automatically. No Playwright authoring required.
+
+**How it works:** You record a user journey, save its trace as a baseline, and `./test.sh run <name>` auto-generates a fresh Playwright test from it every time. The pipeline captures a new trace during replay and compares it semantically against the baseline — same APIs, same forms, same navigation means the app's behavior is unchanged. The generated spec is ephemeral — created, executed, and discarded each run.
+
+**Pass/fail criteria:** Semantic equivalence. Did the app make the same API calls, submit the same forms, navigate the same pages? Selector failures don't count — a `run` test passes if the *behavior* matches even when a Playwright locator times out.
 
 **Who does what:**
 
-- **A human** (or an AI) performs the journey once to create a baseline trace. This can be done by clicking through the app with the XMLUI inspector open, or by describing the journey and letting AI generate a capture script. Either way, the result is a JSON trace file saved to `traces/baselines/`.
+- **A human** (or an AI) performs the journey once to create a baseline trace. This can be done by clicking through the app with the XMLUI inspector open, or by describing the journey and letting AI generate a spec. Either way, the result is a JSON trace file saved to `traces/baselines/`.
 
 - **The pipeline** (`distill-trace.js` → `generate-playwright.js`) reads the baseline and auto-generates a Playwright test. It extracts interaction steps (clicks, form fills, context menus), infers Playwright selectors from ARIA roles and accessible names, and inserts API response waiters to handle async timing. The generated test is ephemeral — created, run, and discarded on each invocation.
 
@@ -115,15 +119,19 @@ Journey: Multi-select two items (Meta+Click) → Copy via context menu → expan
 Key APIs: POST /CopyFile, POST /CopyFolder
 ```
 
-The AI generates a capture script, runs it, and the captured trace becomes the baseline. The capture script is disposable scaffolding — the baseline is what matters. This is useful for rapidly building out a test suite without manually performing each journey. See [Synthetic baselines](#synthetic-baselines) for a worked example.
+The AI generates a spec, runs it, and the captured trace becomes the baseline. The spec is disposable scaffolding — the baseline is what matters. This is useful for rapidly building out a test suite without manually performing each journey. See [Synthetic baselines](#synthetic-baselines) for a worked example.
 
 ---
 
 **Why baseline mode is the default:** When auto-generated tests fall short, the fix is usually a small enhancement to the engine's `xsVerbose` tracing — for example, capturing modifier keys on click events or emitting ARIA metadata on table rows. Enriching the trace data fixes it for all apps and all future baselines, rather than requiring per-test Playwright workarounds. **If auto-generation can't handle a journey, please [open an issue](https://github.com/xmlui-org/trace-tools/issues)** — it likely points to a gap in the engine's tracing that should be fixed upstream.
 
-### Spec mode: hand-written Playwright tests
+### `spec` — hand-written Playwright tests
 
-For advanced scenarios where baseline mode isn't yet sufficient, you can write a Playwright spec by hand and place it in `traces/capture-scripts/<name>.spec.ts`. Run it with `./test.sh spec <name>` or run all specs with `./test.sh spec-all`.
+**Purpose:** Verify specific UI behavior with explicit assertions. The gold standard for correctness.
+
+**How it works:** You write a Playwright spec by hand and place it in `traces/specs/<name>.spec.ts`. Run it with `./test.sh spec <name>` or run all specs with `./test.sh spec-all`. Specs encode domain knowledge — what the UI should show after navigation, how conflict dialogs should resolve, what tree state should look like after a mutation.
+
+**Pass/fail criteria:** Playwright assertion success. Every `expect()` must pass. Specs also capture a trace in their `finally` block, so they can serve as the source for baseline creation via `./test.sh convert <name>`.
 
 Auto-generated tests now include assertions derived from the trace data:
 
@@ -153,7 +161,7 @@ npm install
 npx playwright install chromium
 cd ..
 cp trace-tools/example-test.sh test.sh    # customize, then source test-base.sh
-mkdir -p traces/baselines traces/captures
+mkdir -p traces/baselines traces/runs
 ```
 
 Your app's `test.sh` defines app-specific configuration (like `reset_fixtures()`) and then sources the shared logic from `trace-tools/test-base.sh`. See `example-test.sh` for the minimal template. This means new features (like `--video`) are automatically available to all apps when trace-tools is updated — no need to copy changes into each app's `test.sh`.
@@ -182,12 +190,12 @@ your-app/
     │   ├── copy-paste.json           #   auto-generates a Playwright test from each,
     │   └── ignore-apis.txt           #   replays it, and compares traces semantically.
     │
-    ├── capture-scripts/              # Spec mode: hand-written Playwright tests
+    ├── specs/                        # Playwright test specs
     │   ├── navigation.spec.ts        #   One .spec.ts per test. ./test.sh spec <name>
     │   ├── file-operations.spec.ts   #   runs it directly — no baseline needed.
-    │   └── upload-file.spec.ts       #   Use for assertions the generator can't yet emit.
+    │   └── upload-file.spec.ts       #   Hand-written or generated via convert.
     │
-    ├── captures/                     # Output from baseline test runs (gitignored)
+    ├── runs/                         # Output from baseline test runs (gitignored)
     │   └── rename-file.json          #   Compared against baselines by compare-traces.js
     │
     ├── videos/                       # Recorded videos from --video runs (gitignored)
@@ -210,10 +218,10 @@ your-app/
 | `app-config.json` | Yes (if needed) | Base URL and auth configuration |
 | `traces/baselines/*.json` | Yes | Reference traces — the "known good" behavior |
 | `traces/baselines/ignore-apis.txt` | Yes (if needed) | APIs to exclude from semantic comparison |
-| `traces/capture-scripts/*.spec.ts` | Yes | Hand-written specs for advanced scenarios |
+| `traces/specs/*.spec.ts` | Yes | Playwright test specs (hand-written or generated) |
 | `traces/fixtures/` | Yes | Server filesystem state needed by tests |
 | `traces/fixtures/*.pre.sh` | Yes (if needed) | Per-test fixture hooks |
-| `traces/captures/*.json` | No | Output from baseline runs, compared against baselines |
+| `traces/runs/*.json` | No | Traces captured during baseline runs, compared against baselines |
 | `traces/videos/*.webm` | No | Recorded videos from `--video` runs |
 
 ### Trace-tools (shared dependency)
@@ -321,7 +329,7 @@ Commit this file — it's the reference trace that future test runs compare agai
 This generates a Playwright test from the baseline, runs it in a browser (login is handled headlessly via `app-config.json`), captures a new trace, and compares the two semantically. The captured trace lands at:
 
 ```
-traces/captures/enable-disable-user.json
+traces/runs/enable-disable-user.json
 ```
 
 Output:
@@ -417,7 +425,7 @@ If the behavior *should* have changed (new feature, intentional API change), pro
 ./test.sh update enable-disable-user
 ```
 
-This copies `traces/captures/enable-disable-user.json` to `traces/baselines/enable-disable-user.json`. Commit the updated baseline.
+This copies `traces/runs/enable-disable-user.json` to `traces/baselines/enable-disable-user.json`. Commit the updated baseline.
 
 ## Commands
 
@@ -449,17 +457,17 @@ Failed tests are prefixed with their mode (`spec:` or `run:`) so you can tell wh
 
 ### `./test.sh spec <name>`
 
-Runs a hand-written Playwright spec from `traces/capture-scripts/<name>.spec.ts`. Resets fixtures first.
+Runs a Playwright spec from `traces/specs/<name>.spec.ts`. Resets fixtures first.
 
 ```bash
 ./test.sh spec navigation
 ```
 
-No baseline is needed — the spec is the test. Use this for scenarios that require explicit assertions or complex conditional logic that the auto-generator doesn't yet handle. See [Spec mode](#spec-mode-hand-written-playwright-tests) for when this is appropriate.
+No baseline is needed — the spec is the test. Hand-written specs encode explicit assertions about UI state, tree structure, and content visibility that the auto-generator may not yet emit. See [`spec` mode](#spec--hand-written-playwright-tests) for details.
 
 ### `./test.sh spec-all`
 
-Runs every spec in `traces/capture-scripts/` and reports a summary.
+Runs every spec in `traces/specs/` and reports a summary.
 
 ```bash
 ./test.sh spec-all
@@ -477,7 +485,7 @@ What happens under the hood:
 
 1. **Generate**: `generate-playwright.js` reads `traces/baselines/<journey>.json`, distills the raw trace into interaction steps using `distill-trace.js`, and emits a `.spec.ts` file with Playwright selectors derived from ARIA roles and accessible names.
 2. **Run**: Playwright executes the generated test. For apps with auth, a headless setup project logs in first and saves browser state. The test replays each step (clicks, form fills, waits for API responses) and captures a new trace via the XMLUI inspector.
-3. **Capture**: The new trace is saved to `traces/captures/<journey>.json`.
+3. **Save**: The new trace is saved to `traces/runs/<journey>.json`.
 4. **Compare**: `compare-traces.js` compares the baseline and capture semantically — same API calls (method + endpoint), same form submissions, same navigation. It ignores timing, DOM details, and event ordering differences.
 5. **Clean up**: The generated `.spec.ts` file is deleted.
 
@@ -500,7 +508,7 @@ Lists all available specs and baselines.
 ```
 
 ```
-Spec-based tests (capture-scripts):
+Specs:
   navigation
   copy-paste-and-move
   file-operations
@@ -532,7 +540,7 @@ Use this when the app's behavior has intentionally changed — a new API endpoin
 
 ### `./test.sh convert <name>`
 
-Converts a hand-written capture script into a generated baseline spec. This is the bridge between spec mode and baseline mode.
+Converts a hand-written spec into a generated baseline spec. This is the bridge between `spec` and `run` modes.
 
 ```bash
 ./test.sh convert share-internally
@@ -540,12 +548,12 @@ Converts a hand-written capture script into a generated baseline spec. This is t
 
 What happens under the hood:
 
-1. **Capture**: Runs `./test.sh spec <name>` to execute the manual spec and capture a trace
-2. **Save**: Copies the captured trace to `traces/baselines/<name>.json`
+1. **Run spec**: Runs `./test.sh spec <name>` to execute the hand-written spec and capture a trace
+2. **Save baseline**: Copies the captured trace to `traces/baselines/<name>.json`
 3. **Generate**: Runs `generate-playwright.js` on the baseline to produce a Playwright spec
-4. **Output**: Saves the result as `traces/capture-scripts/generated_<name>.spec.ts`
+4. **Output**: Saves the result as `traces/specs/generated_<name>.spec.ts`
 
-The generated spec can be compared against the manual spec to see what the auto-generator handles and what it misses — useful for identifying engine gaps (missing toast events, modal semantics, etc.) and for validating that generator improvements produce correct output.
+The generated spec can be compared side-by-side against the hand-written spec to see what the auto-generator handles and what it misses — useful for identifying engine gaps (missing toast events, modal semantics, etc.) and for validating that generator improvements produce correct output.
 
 **`update` vs `convert`:** `update` accepts a *baseline run's* capture as the new truth (capture → baseline). `convert` turns a *manual spec* into a generated spec via the full pipeline (manual spec → trace → baseline → generated spec). Use `update` after `run` to accept changed behavior. Use `convert` after writing or improving a manual spec to see what the generator produces from it.
 
@@ -558,7 +566,7 @@ Runs the semantic comparison without running a test. Useful for comparing a prev
 ./test.sh compare paste-conflict-keep-both
 ```
 
-Compares `traces/baselines/<journey>.json` against `traces/captures/<journey>.json`. You must have run the test at least once to have a capture.
+Compares `traces/baselines/<journey>.json` against `traces/runs/<journey>.json`. You must have run the test at least once to have a capture.
 
 ### `./test.sh summary <journey-name>`
 
@@ -760,7 +768,7 @@ On the first passing replay, auto-update would replace the chaotic baseline with
 
 ## Synthetic baselines
 
-With AI assistance, you can create baselines by describing journeys instead of performing them. The AI generates capture scripts, runs them, and produces baseline traces — no manual clicking required. This is useful for rapidly expanding a test suite.
+With AI assistance, you can create baselines by describing journeys instead of performing them. The AI generates specs, runs them, and produces baseline traces — no manual clicking required. This is useful for rapidly expanding a test suite.
 
 Suppose you have this.
 
