@@ -6,16 +6,16 @@
 #
 # The app script may optionally define/override:
 #   TRACE_TOOLS      — path to trace-tools (default: $APP_DIR/trace-tools)
-#   CAPTURE_SCRIPTS  — path to capture scripts (default: $APP_DIR/traces/capture-scripts)
+#   SPECS_DIR      — path to spec files (default: $APP_DIR/traces/specs)
 #   reset_fixtures() — function to reset server state (default: no-op)
 #   pre_spec_hook()  — function called before spec runs, receives spec name as $1
 #                      (use for exporting env vars like MOCK_PATH)
 
 # Defaults for anything the app didn't set
 TRACE_TOOLS="${TRACE_TOOLS:-$APP_DIR/trace-tools}"
-CAPTURE_SCRIPTS="${CAPTURE_SCRIPTS:-$APP_DIR/traces/capture-scripts}"
+SPECS_DIR="${SPECS_DIR:-$APP_DIR/traces/specs}"
 BASELINES="$APP_DIR/traces/baselines"
-CAPTURES="$APP_DIR/traces/captures"
+RUNS="$APP_DIR/traces/runs"
 FIXTURES="$APP_DIR/traces/fixtures"
 VIDEOS="$APP_DIR/traces/videos"
 
@@ -30,8 +30,8 @@ for arg in "$@"; do
 done
 set -- "${ARGS[@]}"
 
-# Ensure captures directory exists so cp doesn't fail when saving captures
-mkdir -p "$CAPTURES"
+# Ensure runs directory exists so cp doesn't fail when saving run traces
+mkdir -p "$RUNS"
 
 if [ ! -d "$TRACE_TOOLS" ]; then
   echo "trace-tools not found. Run:"
@@ -41,8 +41,8 @@ if [ ! -d "$TRACE_TOOLS" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# setup_capture_scripts — ensures trace-tools/capture-scripts mirrors the
-# authoritative source at traces/capture-scripts.
+# setup_specs — ensures trace-tools/specs mirrors the
+# authoritative source at traces/specs.
 #
 # If LINK already exists as a directory (junction, stale copy, or anything
 # else bash cannot distinguish), we do a targeted per-file sync based on
@@ -54,14 +54,14 @@ fi
 #   Unix:   ln -s
 #   Fallback: cp -r (file copy; subsequent calls keep it in sync via the loop)
 # ---------------------------------------------------------------------------
-setup_capture_scripts() {
-  local LINK="$TRACE_TOOLS/capture-scripts"
-  local SOURCE="$CAPTURE_SCRIPTS"
+setup_specs() {
+  local LINK="$TRACE_TOOLS/specs"
+  local SOURCE="$SPECS_DIR"
 
   # POSIX symlink already in place — done.
   [ -L "$LINK" ] && return 0
 
-  # No capture-scripts directory in the app — nothing to link.
+  # No specs directory in the app — nothing to link.
   [ -d "$SOURCE" ] || return 0
 
   if [ -d "$LINK" ]; then
@@ -87,11 +87,11 @@ setup_capture_scripts() {
 
   ln -s "$SOURCE" "$LINK" 2>/dev/null && return 0
 
-  echo "Warning: could not create a link for capture-scripts — using file copy."
+  echo "Warning: could not create a link for specs — using file copy."
   cp -r "$SOURCE" "$LINK"
 }
 
-setup_capture_scripts
+setup_specs
 
 # Collect video from Playwright's test-results into traces/videos/
 collect_video() {
@@ -116,9 +116,9 @@ fi
 case "${1:-help}" in
   list)
     echo ""
-    echo "Spec-based tests (capture-scripts):"
+    echo "Spec-based tests (specs):"
     HAS_SPECS=0
-    for f in "$CAPTURE_SCRIPTS"/*.spec.ts; do
+    for f in "$SPECS_DIR"/*.spec.ts; do
       [ -f "$f" ] || continue
       HAS_SPECS=1
       echo "  $(basename "$f" .spec.ts)"
@@ -156,18 +156,18 @@ case "${1:-help}" in
   spec)
     if [ -z "$2" ]; then
       echo "Usage: ./test.sh spec <name> [--video]"
-      echo "  Resets fixtures, runs capture-scripts/<name>.spec.ts directly. No baseline needed."
+      echo "  Resets fixtures, runs specs/<name>.spec.ts directly. No baseline needed."
       echo ""
-      echo "Available capture scripts:"
-      for f in "$CAPTURE_SCRIPTS"/*.spec.ts; do
+      echo "Available specs:"
+      for f in "$SPECS_DIR"/*.spec.ts; do
         [ -f "$f" ] || continue
         echo "  $(basename "$f" .spec.ts)"
       done
       exit 1
     fi
-    SPEC="$CAPTURE_SCRIPTS/$2.spec.ts"
+    SPEC="$SPECS_DIR/$2.spec.ts"
     if [ ! -f "$SPEC" ]; then
-      echo "Capture script not found: $SPEC"
+      echo "Spec not found: $SPEC"
       exit 1
     fi
 
@@ -227,7 +227,7 @@ case "${1:-help}" in
     PASS=0
     FAIL=0
     FAILED=()
-    for f in "$CAPTURE_SCRIPTS"/*.spec.ts; do
+    for f in "$SPECS_DIR"/*.spec.ts; do
       [ -f "$f" ] || continue
       name=$(basename "$f" .spec.ts)
       echo "--- Spec: $name ---"
@@ -268,7 +268,7 @@ case "${1:-help}" in
 
     # Resolve absolute paths before cd
     ABS_BASELINE="$(cd "$(dirname "$BASELINE")" && pwd)/$(basename "$BASELINE")"
-    ABS_CAPTURES="$(cd "$(dirname "$CAPTURES")" && pwd)/$(basename "$CAPTURES")"
+    ABS_RUNS="$(cd "$(dirname "$RUNS")" && pwd)/$(basename "$RUNS")"
 
     # Generate test from baseline, run it, then discard
     cd "$TRACE_TOOLS"
@@ -314,7 +314,7 @@ case "${1:-help}" in
     fi
     CAPTURED="captured-trace.json"
     if [ -f "$CAPTURED" ]; then
-      cp "$CAPTURED" "$ABS_CAPTURES/$2.json"
+      cp "$CAPTURED" "$ABS_RUNS/$2.json"
       SEMANTIC_OUTPUT=$(node compare-traces.js --semantic $IGNORE_APIS "$ABS_BASELINE" "$CAPTURED" 2>&1)
       echo "$SEMANTIC_OUTPUT"
       echo ""
@@ -373,7 +373,7 @@ case "${1:-help}" in
     FAILED=()
 
     # Specs
-    for f in "$CAPTURE_SCRIPTS"/*.spec.ts; do
+    for f in "$SPECS_DIR"/*.spec.ts; do
       [ -f "$f" ] || continue
       name=$(basename "$f" .spec.ts)
       echo "--- Spec: $name ---"
@@ -416,7 +416,7 @@ case "${1:-help}" in
       echo "Usage: ./test.sh update <journey-name>"
       exit 1
     fi
-    CAPTURED="$CAPTURES/$2.json"
+    CAPTURED="$RUNS/$2.json"
     if [ ! -f "$CAPTURED" ]; then
       echo "No capture found for $2. Run the test first: ./test.sh run $2"
       exit 1
@@ -428,13 +428,13 @@ case "${1:-help}" in
   convert)
     if [ -z "$2" ]; then
       echo "Usage: ./test.sh convert <spec-name>"
-      echo "  Converts traces/capture-scripts/<name>.spec.ts into a generated baseline spec"
+      echo "  Converts traces/specs/<name>.spec.ts into a generated baseline spec"
       exit 1
     fi
     NAME="$2"
-    SPEC="$CAPTURE_SCRIPTS/$NAME.spec.ts"
+    SPEC="$SPECS_DIR/$NAME.spec.ts"
     if [ ! -f "$SPEC" ]; then
-      echo "Capture script not found: $SPEC"
+      echo "Spec not found: $SPEC"
       exit 1
     fi
 
@@ -469,7 +469,7 @@ case "${1:-help}" in
     echo "  Step 3/3 — Generating spec from baseline"
     echo "═══════════════════════════════════════════════════════════════"
     ABS_BASELINE="$(cd "$BASELINES" && pwd)/$NAME.json"
-    OUT_SPEC="$CAPTURE_SCRIPTS/generated_$NAME.spec.ts"
+    OUT_SPEC="$SPECS_DIR/generated_$NAME.spec.ts"
 
     node "$TRACE_TOOLS/generate-playwright.js" "$ABS_BASELINE" "$NAME" > "$OUT_SPEC"
     if [ $? -ne 0 ] || [ ! -s "$OUT_SPEC" ]; then
@@ -481,7 +481,7 @@ case "${1:-help}" in
     echo ""
     echo "═══════════════════════════════════════════════════════════════"
     echo "  CONVERT DONE"
-    echo "  Generated spec: traces/capture-scripts/generated_$NAME.spec.ts"
+    echo "  Generated spec: traces/specs/generated_$NAME.spec.ts"
     echo "═══════════════════════════════════════════════════════════════"
     echo ""
     ;;
@@ -492,7 +492,7 @@ case "${1:-help}" in
       exit 1
     fi
     BASELINE="$BASELINES/$2.json"
-    CAPTURED="$CAPTURES/$2.json"
+    CAPTURED="$RUNS/$2.json"
     if [ ! -f "$BASELINE" ]; then echo "No baseline: $2"; exit 1; fi
     if [ ! -f "$CAPTURED" ]; then echo "No capture: $2 (run the test first)"; exit 1; fi
     node "$TRACE_TOOLS/compare-traces.js" --semantic "$BASELINE" "$CAPTURED"
@@ -515,8 +515,8 @@ case "${1:-help}" in
     echo "  test-all [--video]             Run all specs and all baselines"
     echo ""
     echo "Spec-based tests (no baseline required):"
-    echo "  spec <name> [--video]          Reset fixtures, run capture-scripts/<name>.spec.ts"
-    echo "  spec-all [--video]             Run all capture scripts"
+    echo "  spec <name> [--video]          Reset fixtures, run specs/<name>.spec.ts"
+    echo "  spec-all [--video]             Run all specs"
     echo ""
     echo "Baseline-based tests (inspector-recorded journeys):"
     echo "  run <journey> [--video]        Reset fixtures, generate test from baseline, run, compare"
