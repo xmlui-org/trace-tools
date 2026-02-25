@@ -6,7 +6,7 @@ const { parseTrace } = require('./parse-trace');
 const { distillTrace } = require('./distill-trace');
 
 function generatePlaywright(distilled, options = {}) {
-  const { testName = 'user-journey', baseUrl = '/', captureTrace = true, useHashRouting = true, browserErrors = false } = options;
+  const { testName = 'user-journey', baseUrl = '/', captureTrace = true, useHashRouting = true, browserErrors = false, ignoreLabels = new Set() } = options;
 
   const lines = [
     `import { test, expect } from '@playwright/test';`,
@@ -38,7 +38,7 @@ function generatePlaywright(distilled, options = {}) {
   for (let si = 0; si < orderedSteps.length; si++) {
     const step = orderedSteps[si];
     const stepLines = [];
-    stepLines.push(...generateStepCode(step, fillPlan, responsePromiseCounter, si));
+    stepLines.push(...generateStepCode(step, fillPlan, responsePromiseCounter, si, ignoreLabels));
     // Increment counter by the number of deduplicated API promises used
     if (step.action !== 'startup' && step.await?.api?.length > 0) {
       const seenPaths = new Set();
@@ -464,7 +464,7 @@ function clickOptions(target, extra = {}) {
   return `{ ${parts.join(', ')} }`;
 }
 
-function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0) {
+function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ignoreLabels = new Set()) {
   const lines = [];
   const indent = '  ';
 
@@ -618,14 +618,16 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0) {
     }
   }
 
-  // Assert DataSource changes after mutating operations
+  // Assert DataSource changes after mutating operations or navigation
   if (step.dataSourceChanges?.length > 0) {
     for (const change of step.dataSourceChanges) {
       for (const name of (change.added || [])) {
+        if (ignoreLabels.has(name)) continue;
         const escaped = name.replace(/'/g, "\\'");
         lines.push(`${indent}await expect(page.getByRole('cell', { name: '${escaped}', exact: true })).toBeVisible({ timeout: 10000 });`);
       }
       for (const name of (change.removed || [])) {
+        if (ignoreLabels.has(name)) continue;
         const escaped = name.replace(/'/g, "\\'");
         lines.push(`${indent}await expect(page.getByRole('cell', { name: '${escaped}', exact: true })).toHaveCount(0);`);
       }
@@ -952,6 +954,19 @@ if (require.main === module) {
     distilled = distillTrace(parsed);
   }
 
-  const playwright = generatePlaywright(distilled, { testName, useHashRouting, browserErrors });
+  // Load app-specific ignore-labels.txt from the same directory as the baseline
+  const ignoreLabels = new Set();
+  if (inputFile !== '/dev/stdin') {
+    const ignoreFile = path.join(path.dirname(inputFile), 'ignore-labels.txt');
+    if (fs.existsSync(ignoreFile)) {
+      fs.readFileSync(ignoreFile, 'utf8')
+        .split('\n')
+        .map(l => l.trim())
+        .filter(l => l && !l.startsWith('#'))
+        .forEach(l => ignoreLabels.add(l));
+    }
+  }
+
+  const playwright = generatePlaywright(distilled, { testName, useHashRouting, browserErrors, ignoreLabels });
   console.log(playwright);
 }
