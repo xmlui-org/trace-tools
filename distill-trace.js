@@ -362,18 +362,17 @@ function distillJsonLogs(logs) {
   }
 
   // Diff consecutive DataSource array snapshots to detect items added or
-  // removed by mutating operations. Only attach to steps that have mutating
-  // API calls (POST/PUT/DELETE/PATCH) — navigation-only changes are not
-  // assertion-worthy.
+  // removed by mutating operations or navigation (folder changes).
   const prevSnapshots = {}; // DataSource path → [labels]
   for (const step of steps) {
     if (step._dataSourceSnapshots) {
       const hasMutation = step.await?.api?.some(a =>
         ['POST', 'PUT', 'DELETE', 'PATCH'].includes(a.method)
       );
+      const hasNavigate = !!step.await?.navigate;
 
       for (const [dsPath, labels] of Object.entries(step._dataSourceSnapshots)) {
-        if (prevSnapshots[dsPath] && hasMutation) {
+        if (prevSnapshots[dsPath] && (hasMutation || hasNavigate)) {
           const prevSet = new Set(prevSnapshots[dsPath]);
           const currSet = new Set(labels);
           const added = labels.filter(l => !prevSet.has(l));
