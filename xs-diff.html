@@ -2413,6 +2413,9 @@
         const apiCompleteCounts = new Map(); // fingerprint -> { entry, count, meta }
         const apiStartCounts = new Map(); // method:url -> { entry, count, meta }
 
+        // Track value:change/focus:change/native:* — group by component, collapse to range
+        const valueChangeRanges = new Map(); // groupKey -> { firstEntry, lastEntry, count, firstValue, lastValue, meta }
+
         // Track handler deduplication (for repeated handlers from polling)
         const handlerCounts = new Map(); // fingerprint -> { entry, count, meta }
 
@@ -2512,6 +2515,26 @@
             return; // Will add after loop
           }
 
+          // Collapse value:change, focus:change, and native:* into ranges per component
+          if (e.kind === "value:change" || e.kind === "focus:change" || (e.kind && e.kind.startsWith("native:"))) {
+            const comp = e.componentLabel || e.component || "";
+            const val = e.displayLabel || "";
+            const groupKey = `${e.kind}|${e.eventName || ""}|${comp}`;
+            if (valueChangeRanges.has(groupKey)) {
+              const tracking = valueChangeRanges.get(groupKey);
+              tracking.lastEntry = e;
+              tracking.lastValue = val;
+              tracking.count += 1;
+              return;
+            }
+            valueChangeRanges.set(groupKey, {
+              firstEntry: e, lastEntry: e, count: 1,
+              firstValue: val, lastValue: val,
+              meta: buildEntryMeta(e),
+            });
+            return;
+          }
+
           // Deduplicate component:vars events with identical values
           if (e.kind === "component:vars:init" || e.kind === "component:vars:change") {
             const varName = e.eventName || "unknown";
@@ -2534,13 +2557,15 @@
             eventTitle += ` (${e.duration.toFixed(1)}ms)`;
           }
 
-          // Build a descriptive label: prefer displayLabel (standard convention for behavioral events),
-          // fall back to componentLabel, then component name
-          let label = e.componentLabel ? `"${e.componentLabel}"` : "";
-          if (!label && e.displayLabel) {
-            label = (e.component ? e.component + " " : "") + `"${e.displayLabel}"`;
-          } else if (!label && e.component) {
-            label = e.component;
+          // Build a descriptive label: combine componentLabel/componentType with displayLabel
+          let label = "";
+          const compName = e.componentLabel || e.component || "";
+          if (compName && e.displayLabel) {
+            label = `${compName} "${e.displayLabel}"`;
+          } else if (e.displayLabel) {
+            label = `"${e.displayLabel}"`;
+          } else if (compName) {
+            label = compName;
           }
 
           events.push({
@@ -2549,6 +2574,27 @@
             label,
           });
         });
+
+        // Add collapsed value:change/focus:change/native:* ranges
+        for (const [, data] of valueChangeRanges) {
+          const { firstEntry, count, firstValue, lastValue, meta } = data;
+          const compType = firstEntry.component || "";
+          const compId = firstEntry.componentLabel || "";
+          const compName = compType && compId && compType !== compId ? `${compType} "${compId}"` : compId || compType;
+          let label;
+          if (count === 1 || firstValue === lastValue) {
+            label = compName && firstValue ? `${compName} "${firstValue}"` : firstValue ? `"${firstValue}"` : compName;
+          } else {
+            label = compName ? `${compName} "${firstValue}" → "${lastValue}"` : `"${firstValue}" → "${lastValue}"`;
+          }
+          events.push({
+            entry: { ...firstEntry, _dedupCount: count },
+            meta,
+            eventTitle: firstEntry.kind + (firstEntry.eventName ? ` ${firstEntry.eventName}` : ""),
+            label,
+          });
+          if (count > 1) dedupedCount += count - 1;
+        }
 
         // Add deduplicated component:vars events with counts
         for (const [, data] of componentVarsCounts) {
@@ -3756,11 +3802,25 @@
             bodyHtml += `<div class="trace-event-header">interaction ${interactionType}${evt.label ? ` ${evt.label}` : ""}${metaInline}</div>`;
           } else {
             const bootstrapBadge = e._bootstrap ? ` <span class="badge-bootstrap">bootstrap</span>` : "";
-            bodyHtml += `<div class="trace-event-header">${evt.eventTitle}${evt.label ? ` ${evt.label}` : ""}${bootstrapBadge}${metaInline}</div>`;
+            const dedupCount = e._dedupCount || 1;
+            const dedupInfo = dedupCount > 1 ? ` <span class="badge-muted">\u00d7${dedupCount}</span>` : "";
+            bodyHtml += `<div class="trace-event-header">${evt.eventTitle}${dedupInfo}${evt.label ? ` ${evt.label}` : ""}${bootstrapBadge}${metaInline}</div>`;
 
-            // Show source range for non-DataSource events too
-            if (evt.meta.hasSource) {
-              bodyHtml += `<div class="trace-meta">source ${evt.meta.sourceRange}</div>`;
+            // Show XMLUI source expander for events that carry source info
+            if (evt.meta.hasSource && evt.meta.resolvedFile) {
+              const [startChar, endChar] = evt.meta.sourceRange.split("-").map(Number);
+              if (e.kind && e.kind.startsWith("native:")) {
+                // Native events: plain source expander (event isn't declared in XMLUI markup)
+                bodyHtml += `<details class="source-loader" data-file="${evt.meta.resolvedFile}" data-start="${startChar}" data-end="${endChar}">`;
+              } else {
+                // value:change, focus:change, etc.: search for the handler attribute in source
+                const eventName = e.eventName || "";
+                const componentLabel = e.componentLabel || "";
+                bodyHtml += `<details class="source-loader" data-file="${evt.meta.resolvedFile}" data-handler-name="${eventName}" data-component-label="${componentLabel}" data-search-handler="true">`;
+              }
+              bodyHtml += `<summary>XMLUI Source</summary>`;
+              bodyHtml += `<pre class="source-code">Click to load...</pre>`;
+              bodyHtml += `</details>`;
             }
           }
 
@@ -6130,6 +6190,43 @@
           // Should NOT collapse - different code
           const handlerStarts = processedEvents.filter(e => e.entry.kind === "handler:start");
           assertEqual(handlerStarts.length, 2, "Handlers with different code should remain separate");
+        });
+
+        test("Deduplication", "value:change events on same component collapse to range", () => {
+          const traceId = "test-value-range";
+          const events = [
+            { kind: "value:change", eventName: "didChange", componentLabel: "Gauge", displayLabel: "42", traceId, perfTs: 100 },
+            { kind: "value:change", eventName: "didChange", componentLabel: "Gauge", displayLabel: "44.21", traceId, perfTs: 101 },
+            { kind: "value:change", eventName: "didChange", componentLabel: "Gauge", displayLabel: "46.9", traceId, perfTs: 102 },
+          ];
+          const { events: processedEvents, dedupedCount } = processTraceEvents(events);
+          assertEqual(processedEvents.length, 1, "Should collapse to 1 range event");
+          assertEqual(processedEvents[0].entry._dedupCount, 3, "Should have count 3");
+          assertContains(processedEvents[0].label, "42", "Label should include first value");
+          assertContains(processedEvents[0].label, "46.9", "Label should include last value");
+          assertEqual(dedupedCount, 2, "Should report 2 deduped");
+        });
+
+        test("Deduplication", "value:change on different components stay separate", () => {
+          const traceId = "test-value-diff-comp";
+          const events = [
+            { kind: "value:change", eventName: "didChange", componentLabel: "Gauge", displayLabel: "42", traceId, perfTs: 100 },
+            { kind: "value:change", eventName: "didChange", componentLabel: "Slider", displayLabel: "50", traceId, perfTs: 101 },
+          ];
+          const { events: processedEvents } = processTraceEvents(events);
+          assertEqual(processedEvents.length, 2, "Different components should remain separate");
+        });
+
+        test("Deduplication", "native:* events on same component collapse to range", () => {
+          const traceId = "test-native-range";
+          const events = [
+            { kind: "native:mousemove", componentLabel: "EChart", displayLabel: "hover: bar 3", traceId, perfTs: 100 },
+            { kind: "native:mousemove", componentLabel: "EChart", displayLabel: "hover: bar 5", traceId, perfTs: 101 },
+          ];
+          const { events: processedEvents, dedupedCount } = processTraceEvents(events);
+          assertEqual(processedEvents.length, 1, "Should collapse to 1 range event");
+          assertEqual(processedEvents[0].entry._dedupCount, 2, "Should have count 2");
+          assertEqual(dedupedCount, 1, "Should report 1 deduped");
         });
 
         // =========================================================================
