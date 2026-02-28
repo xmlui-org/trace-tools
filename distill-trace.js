@@ -441,7 +441,47 @@ function distillJsonLogs(logs) {
     }
   }
 
-  return { steps: deduped };
+  // Coalesce consecutive value changes on the same target.
+  // A slider drag via 10 ArrowRight presses produces 10 steps each with
+  // valueChanges. Keep only the last one — we assert the final value.
+  const coalesced = [];
+  for (let i = 0; i < deduped.length; i++) {
+    const step = deduped[i];
+    if (step.valueChanges?.length > 0) {
+      // Look ahead: if the next step(s) are the same action on the same
+      // target with valueChanges, skip this one in favor of the last.
+      let j = i + 1;
+      while (j < deduped.length &&
+             deduped[j].action === step.action &&
+             deduped[j].target?.ariaRole === step.target?.ariaRole &&
+             deduped[j].target?.ariaName === step.target?.ariaName &&
+             deduped[j].valueChanges?.length > 0) {
+        j++;
+      }
+      // Push only the last step in the run (j-1), with keyCount for replay
+      const lastStep = deduped[j - 1];
+      const count = j - i;
+      if (count > 1 && lastStep.action === 'keydown') {
+        lastStep.keyCount = count;
+        // Preserve the key from any step in the run (they're all the same key)
+        if (!lastStep.target?.key) {
+          for (let k = i; k < j; k++) {
+            if (deduped[k].target?.key) {
+              if (!lastStep.target) lastStep.target = {};
+              lastStep.target.key = deduped[k].target.key;
+              break;
+            }
+          }
+        }
+      }
+      coalesced.push(lastStep);
+      i = j - 1; // advance past the run
+    } else {
+      coalesced.push(step);
+    }
+  }
+
+  return { steps: coalesced };
 }
 
 function extractStepFromJsonLogs(trace) {
@@ -618,6 +658,22 @@ function extractStepFromJsonLogs(trace) {
     .map(e => ({ type: e.toastType || 'default', message: e.message }));
   if (toasts.length > 0) {
     step.toasts = toasts;
+  }
+
+  // Capture value:change events — emitted by wrapComponent for form controls.
+  // Keep only the last value per component (coalesces rapid changes like slider drag).
+  const valueChanges = events.filter(e => e.kind === 'value:change');
+  if (valueChanges.length > 0) {
+    const byComponent = new Map();
+    for (const vc of valueChanges) {
+      const entry = {
+        component: vc.component,
+        value: vc.displayLabel != null ? String(vc.displayLabel) : undefined,
+      };
+      if (vc.ariaName) entry.ariaName = vc.ariaName;
+      byComponent.set(vc.component, entry);
+    }
+    step.valueChanges = Array.from(byComponent.values());
   }
 
   // Capture submenu:open events — these fire during the contextmenu trace

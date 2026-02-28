@@ -34,7 +34,32 @@ function generatePlaywright(distilled, options = {}) {
   const firstInteraction = otherSteps[0];
   const startingPage = firstInteraction?.await?.navigate?.from;
 
+  // Pre-pass: propagate ariaName from valueChanges to preceding click steps
+  // that target the same ariaRole but lack an ariaName. This happens when the
+  // user clicks a Radix slider thumb (role=slider, no name) then presses
+  // ArrowRight — the value:change event has ariaName from the container's
+  // aria-label, but the click interaction only sees the thumb.
+  for (let i = orderedSteps.length - 1; i >= 0; i--) {
+    const step = orderedSteps[i];
+    if (step.valueChanges?.length > 0) {
+      const vc = step.valueChanges[0];
+      if (vc.ariaName) {
+        // Look backward for a click on the same ariaRole with no ariaName
+        for (let j = i - 1; j >= 0; j--) {
+          const prev = orderedSteps[j];
+          if (prev.action === 'click' &&
+              prev.target?.ariaRole === step.target?.ariaRole &&
+              !prev.target?.ariaName) {
+            prev.target.ariaName = vc.ariaName;
+            break;
+          }
+        }
+      }
+    }
+  }
+
   let responsePromiseCounter = 0;
+  let gotoEmitted = !!startupStep;
   for (let si = 0; si < orderedSteps.length; si++) {
     const step = orderedSteps[si];
     const stepLines = [];
@@ -230,6 +255,18 @@ function generatePlaywright(distilled, options = {}) {
     }
   }
 });`;
+  }
+
+  // If there's no startup step, insert goto before the first test.step.
+  // After captureTrace wrapping, test.step lines may be embedded in multi-line
+  // splice strings, so search the joined output and insert textually.
+  if (!startupStep) {
+    const joined = lines.join('\n');
+    const marker = "  await test.step('";
+    const idx = joined.indexOf(marker);
+    if (idx !== -1) {
+      return joined.slice(0, idx) + "  await page.goto('./');\n\n" + joined.slice(idx);
+    }
   }
 
   return lines.join('\n');
@@ -602,9 +639,18 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
         lines.push(`${indent}await page.getByRole('textbox', { name: '${kdAriaName}' }).fill('${entry.value.replace(/'/g, "\\'")}');`);
         return lines;
       }
-      // Skip keydowns not covered by fill plan
-      lines.pop();
-      return [];
+      // Skip keydowns not covered by fill plan — unless they have valueChanges
+      if (!step.valueChanges?.length) {
+        lines.pop();
+        return [];
+      }
+      // Emit key presses for coalesced keydown steps (e.g. 5 ArrowRights on a slider)
+      const key = step.target?.key || 'ArrowRight';
+      const count = step.keyCount || 1;
+      lines.push(`${indent}for (let i = 0; i < ${count}; i++) {`);
+      lines.push(`${indent}  await page.keyboard.press('${key}');`);
+      lines.push(`${indent}}`);
+      break;
     }
 
     case 'toast':
@@ -667,6 +713,49 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
         if (ignoreLabels.has(name)) continue;
         const escaped = name.replace(/'/g, "\\'");
         lines.push(`${indent}await expect(page.getByRole('cell', { name: '${escaped}', exact: true })).toHaveCount(0);`);
+      }
+    }
+  }
+
+  // Assert value changes from wrapComponent trace events.
+  // The value:change event carries ariaName from the component's aria-label prop.
+  // The interaction event carries ariaRole from the DOM element that was clicked.
+  // Together they let us build a locator and pick the right assertion method.
+  if (step.valueChanges?.length > 0) {
+    for (const vc of step.valueChanges) {
+      if (vc.value == null) continue;
+      const escaped = vc.value.replace(/'/g, "\\'");
+      const ariaRole = step.target?.ariaRole;
+      const ariaName = vc.ariaName || step.target?.ariaName;
+
+      // Build locator based on ariaRole + ariaName
+      let locator;
+      if (ariaName && ariaRole === 'slider') {
+        // Radix slider: aria-label on container div, role="slider" on thumb inside
+        locator = `page.locator('[aria-label="${ariaName}"]').getByRole('slider').first()`;
+      } else if (ariaRole && ariaName) {
+        locator = `page.getByRole('${ariaRole}', { name: '${ariaName}' })`;
+      } else if (step.target?.testId) {
+        locator = `page.locator('[data-testid="${step.target.testId}"]')`;
+      }
+      if (!locator) continue;
+
+      // Pick assertion method based on ariaRole
+      switch (ariaRole) {
+        case 'slider':
+          lines.push(`${indent}await expect(${locator}).toHaveAttribute('aria-valuenow', '${escaped}');`);
+          break;
+        case 'textbox':
+        case 'textarea':
+          lines.push(`${indent}await expect(${locator}).toHaveValue('${escaped}');`);
+          break;
+        case 'checkbox':
+        case 'switch':
+          lines.push(`${indent}await expect(${locator}).${escaped === 'true' ? 'toBeChecked' : 'not.toBeChecked'}();`);
+          break;
+        default:
+          lines.push(`${indent}await expect(${locator}).toHaveAttribute('aria-valuenow', '${escaped}');`);
+          break;
       }
     }
   }
@@ -806,7 +895,13 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
         const parentEscaped = step.submenuParent.replace(/'/g, "\\'");
         lines.push(`${indent}await page.getByRole('menuitem', { name: '${parentEscaped}', exact: true }).hover();`);
       }
-      lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}'${exact ? ', exact: true' : ''} })${methodCall};`);
+      // Radix slider: aria-label on container div, role="slider" on thumb inside.
+      // getByRole('slider', { name }) won't match because they're on different elements.
+      if (ariaRole === 'slider') {
+        lines.push(`${indent}await page.locator('[aria-label="${ariaName}"]').getByRole('slider').first()${methodCall};`);
+      } else {
+        lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}'${exact ? ', exact: true' : ''} })${methodCall};`);
+      }
     }
     return lines;
   }

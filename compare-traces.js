@@ -320,6 +320,22 @@ function extractSemantics(input) {
       return line;
     });
 
+  // Extract value changes (from wrapComponent trace events)
+  const valueChanges = logs
+    .filter(e => e.kind === 'value:change')
+    .map(e => ({
+      component: e.component,
+      value: e.displayLabel != null ? String(e.displayLabel) : undefined,
+      ariaName: e.ariaName
+    }));
+  // Keep only the last value per component (coalesce rapid changes)
+  const lastValueByComponent = {};
+  for (const vc of valueChanges) {
+    lastValueByComponent[vc.ariaName || vc.component] = vc;
+  }
+  const uniqueValueChanges = Object.values(lastValueByComponent)
+    .map(vc => `${vc.ariaName || vc.component}=${vc.value}`);
+
   return {
     apis: uniqueApis,
     apiCount: apis.length,
@@ -329,6 +345,7 @@ function extractSemantics(input) {
     navigations: uniqueNavigations,
     contextMenus,
     confirmationDialogs,
+    valueChanges: uniqueValueChanges,
     journey
   };
 }
@@ -463,6 +480,22 @@ function compareSemanticTraces(trace1, trace2, options = {}) {
     });
   }
 
+  // Compare value changes
+  const vc1 = (sem1.valueChanges || []).sort();
+  const vc2 = (sem2.valueChanges || []).sort();
+  const missingVC = vc1.filter(v => !vc2.includes(v));
+  const extraVC = vc2.filter(v => !vc1.includes(v));
+
+  if (missingVC.length > 0 || extraVC.length > 0) {
+    report.match = false;
+    report.differences.push({
+      type: 'value_changes',
+      message: 'Value change mismatch',
+      missing: missingVC,
+      extra: extraVC
+    });
+  }
+
   // Add summaries
   report.before = sem1;
   report.after = sem2;
@@ -513,6 +546,7 @@ function formatSemanticReport(report, options = {}) {
     lines.push(`  Form submits: ${sem.formSubmits.length} (${sem.formSubmits.join(' → ')})`);
     lines.push(`  Context menus: ${sem.contextMenus.join(', ')}`);
     lines.push(`  Confirmation dialogs: ${(sem.confirmationDialogs || []).length > 0 ? sem.confirmationDialogs.map(d => `"${d.title}"→${d.outcome}`).join(', ') : '(none)'}`);
+    lines.push(`  Value changes: ${(sem.valueChanges || []).length > 0 ? sem.valueChanges.join(', ') : '(none)'}`);
     if (showJourney && sem.journey) {
       lines.push('  Journey:');
       for (const step of sem.journey) {
