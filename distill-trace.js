@@ -358,11 +358,25 @@ function distillJsonLogs(logs) {
     .filter(e => e.kind === 'submenu:open')
     .map(e => ({ ts: e.perfTs || e.ts, label: e.ariaName || e.componentLabel }));
 
+  // Defense-in-depth: find the first interaction's perfTs so we can detect
+  // startup-traced events that actually belong to post-interaction activity
+  // (e.g. DataSource re-fetches incorrectly attributed to the startup trace).
+  const firstInteractionPerfTs = logs
+    .filter(e => e.kind === 'interaction')
+    .reduce((min, e) => Math.min(min, e.perfTs || e.ts || Infinity), Infinity);
+
   // Group logs by traceId
   const traces = new Map();
 
   for (const log of logs) {
-    const traceId = log.traceId || 'unknown';
+    let traceId = log.traceId || 'unknown';
+    // If event has a startup traceId but occurs after the first interaction,
+    // strip the traceId so it doesn't pollute the startup group.
+    if (traceId.startsWith('startup-') &&
+        firstInteractionPerfTs < Infinity &&
+        (log.perfTs || log.ts || 0) > firstInteractionPerfTs) {
+      traceId = 'unknown';
+    }
     if (!traces.has(traceId)) {
       traces.set(traceId, {
         traceId,
