@@ -1819,6 +1819,31 @@
         return { type: "other", code: trimmed };
       }
 
+      /**
+       * Classify a diff item into a category for rendering.
+       * Shared by pretty and raw views to avoid duplicated if/else chains.
+       */
+      function classifyDiffItem(d) {
+        const before = d.before;
+        const after = d.after;
+        if (Array.isArray(before) && Array.isArray(after) && (isKeyedArray(before) || isKeyedArray(after))) {
+          return { type: "keyedArrayDiff", before, after, path: d.path };
+        }
+        if (before === undefined && Array.isArray(after) && isKeyedArray(after)) {
+          return { type: "keyedArrayInit", after, path: d.path };
+        }
+        if (Array.isArray(before) && after === undefined && isKeyedArray(before)) {
+          return { type: "keyedArrayCleared", before, path: d.path };
+        }
+        if (before && after && typeof before === "object" && typeof after === "object" && !Array.isArray(before) && !Array.isArray(after)) {
+          return { type: "objectDiff", before, after, path: d.path };
+        }
+        if (before === undefined && after === undefined) {
+          return { type: "noop", path: d.path };
+        }
+        return { type: "scalarDiff", before, after, path: d.path };
+      }
+
       function extractFunctionCalls(code) {
         if (!code) return [];
         const builtIns = new Set([
@@ -3677,15 +3702,15 @@
               // Check if this is an array diff that should be summarized
               if (e.diff.length === 1) {
                 const only = e.diff[0];
-                if (Array.isArray(only.before) && Array.isArray(only.after) && (isKeyedArray(only.before) || isKeyedArray(only.after))) {
-                  const analysis = analyzeArrayDiff(only.before, only.after);
+                const classified = classifyDiffItem(only);
+                if (classified.type === "keyedArrayDiff") {
+                  const analysis = analyzeArrayDiff(classified.before, classified.after);
                   if (analysis.isSignificant) {
                     bodyHtml += `<div>${renderArrayDiffSummary(analysis)}</div>`;
                     usedArraySummary = true;
                   }
-                } else if (only.before === undefined && Array.isArray(only.after) && isKeyedArray(only.after)) {
-                  // Init case: undefined → array
-                  bodyHtml += `<div class="text-success">${only.after.length} item${only.after.length !== 1 ? "s" : ""} initialized</div>`;
+                } else if (classified.type === "keyedArrayInit") {
+                  bodyHtml += `<div class="text-success">${classified.after.length} item${classified.after.length !== 1 ? "s" : ""} initialized</div>`;
                   usedArraySummary = true;
                 }
               }
@@ -3859,17 +3884,18 @@
             let arrayBefore = null, arrayAfter = null;
             if (e.diffJson.length === 1) {
               const only = e.diffJson[0];
-              if (Array.isArray(only.before) && Array.isArray(only.after) && (isKeyedArray(only.before) || isKeyedArray(only.after))) {
-                const analysis = analyzeArrayDiff(only.before, only.after);
+              const classified = classifyDiffItem(only);
+              if (classified.type === "keyedArrayDiff") {
+                const analysis = analyzeArrayDiff(classified.before, classified.after);
                 if (analysis.isSignificant) {
                   bodyHtml += `<div>${renderArrayDiffSummary(analysis)}</div>`;
                   usedArraySummary = true;
                   // Save arrays for full diff with context
-                  arrayBefore = only.before;
-                  arrayAfter = only.after;
+                  arrayBefore = classified.before;
+                  arrayAfter = classified.after;
                 }
-              } else if (Array.isArray(only.before) && only.after === undefined && isKeyedArray(only.before)) {
-                bodyHtml += `<div class="text-error">${only.before.length} item${only.before.length !== 1 ? "s" : ""} → cleared</div>`;
+              } else if (classified.type === "keyedArrayCleared") {
+                bodyHtml += `<div class="text-error">${classified.before.length} item${classified.before.length !== 1 ? "s" : ""} → cleared</div>`;
                 usedArraySummary = true;
               }
             }
@@ -3975,14 +4001,15 @@
               let usedArraySummary = false;
               if (e.diffJson.length === 1) {
                 const only = e.diffJson[0];
-                if (Array.isArray(only.before) && Array.isArray(only.after) && (isKeyedArray(only.before) || isKeyedArray(only.after))) {
-                  const analysis = analyzeArrayDiff(only.before, only.after);
+                const classified = classifyDiffItem(only);
+                if (classified.type === "keyedArrayDiff") {
+                  const analysis = analyzeArrayDiff(classified.before, classified.after);
                   if (analysis.isSignificant) {
                     html += `<div>${renderArrayDiffSummary(analysis)}</div>`;
                     usedArraySummary = true;
                   }
-                } else if (Array.isArray(only.before) && only.after === undefined && isKeyedArray(only.before)) {
-                  html += `<div class="text-error">${only.before.length} item${only.before.length !== 1 ? "s" : ""} → cleared</div>`;
+                } else if (classified.type === "keyedArrayCleared") {
+                  html += `<div class="text-error">${classified.before.length} item${classified.before.length !== 1 ? "s" : ""} → cleared</div>`;
                   usedArraySummary = true;
                 }
               }
@@ -4015,14 +4042,15 @@
           let usedArraySummary = false;
           if (entry.diffJson.length === 1) {
             const only = entry.diffJson[0];
-            if (Array.isArray(only.before) && Array.isArray(only.after) && (isKeyedArray(only.before) || isKeyedArray(only.after))) {
-              const analysis = analyzeArrayDiff(only.before, only.after);
+            const classified = classifyDiffItem(only);
+            if (classified.type === "keyedArrayDiff") {
+              const analysis = analyzeArrayDiff(classified.before, classified.after);
               if (analysis.isSignificant) {
                 html += `<div>${renderArrayDiffSummary(analysis)}</div>`;
                 usedArraySummary = true;
               }
-            } else if (Array.isArray(only.before) && only.after === undefined && isKeyedArray(only.before)) {
-              html += `<div class="text-error">${only.before.length} item${only.before.length !== 1 ? "s" : ""} → cleared</div>`;
+            } else if (classified.type === "keyedArrayCleared") {
+              html += `<div class="text-error">${classified.before.length} item${classified.before.length !== 1 ? "s" : ""} → cleared</div>`;
               usedArraySummary = true;
             }
           }
@@ -4079,37 +4107,40 @@
               lines.push(`        Update ${i + 1} @ ${item.relTime}`);
               if (e.diffJson) {
                 e.diffJson.forEach((d) => {
-                  if (Array.isArray(d.before) && Array.isArray(d.after) && (isKeyedArray(d.before) || isKeyedArray(d.after))) {
-                    const summary = summarizeArrayDiff(d.before, d.after);
-                    lines.push(`            ${d.path}:`);
-                    summary.split("\n").forEach((line) => lines.push(`                ${line}`));
-                  } else if (Array.isArray(d.after) && d.before === undefined && isKeyedArray(d.after)) {
-                    lines.push(`            ${d.path}: initialized with ${d.after.length} items`);
-                  } else if (Array.isArray(d.before) && d.after === undefined && isKeyedArray(d.before)) {
-                    lines.push(`            ${d.path}: ${d.before.length} items → cleared`);
-                  } else if (d.before && d.after && typeof d.before === "object" && typeof d.after === "object" && !Array.isArray(d.before) && !Array.isArray(d.after)) {
-                    // Object diff - show which fields changed
-                    const allKeys = new Set([...Object.keys(d.before), ...Object.keys(d.after)]);
-                    const changedKeys = [];
-                    allKeys.forEach((key) => {
-                      const bv = JSON.stringify(d.before[key]);
-                      const av = JSON.stringify(d.after[key]);
-                      if (bv !== av) changedKeys.push(key);
-                    });
-                    if (changedKeys.length === 0) {
-                      lines.push(`            ${d.path}: (no visible change)`);
-                    } else {
+                  const classified = classifyDiffItem(d);
+                  switch (classified.type) {
+                    case "keyedArrayDiff": {
+                      const summary = summarizeArrayDiff(classified.before, classified.after);
                       lines.push(`            ${d.path}:`);
-                      changedKeys.forEach((key) => {
-                        const bv = d.before[key];
-                        const av = d.after[key];
-                        const bvStr = bv === undefined ? "undefined" : JSON.stringify(bv)?.slice(0, 60) || "null";
-                        const avStr = av === undefined ? "undefined" : JSON.stringify(av)?.slice(0, 60) || "null";
-                        lines.push(`                ${key}: ${bvStr} → ${avStr}`);
-                      });
+                      summary.split("\n").forEach((line) => lines.push(`                ${line}`));
+                      break;
                     }
-                  } else {
-                    lines.push(`            ${d.path}: ${JSON.stringify(d.before)?.slice(0, 80) || "undefined"} → ${JSON.stringify(d.after)?.slice(0, 80) || "undefined"}`);
+                    case "keyedArrayInit":
+                      lines.push(`            ${d.path}: initialized with ${classified.after.length} items`);
+                      break;
+                    case "keyedArrayCleared":
+                      lines.push(`            ${d.path}: ${classified.before.length} items → cleared`);
+                      break;
+                    case "objectDiff": {
+                      const allKeys = new Set([...Object.keys(classified.before), ...Object.keys(classified.after)]);
+                      const changedKeys = [];
+                      allKeys.forEach((key) => {
+                        if (JSON.stringify(classified.before[key]) !== JSON.stringify(classified.after[key])) changedKeys.push(key);
+                      });
+                      if (changedKeys.length === 0) {
+                        lines.push(`            ${d.path}: (no visible change)`);
+                      } else {
+                        lines.push(`            ${d.path}:`);
+                        changedKeys.forEach((key) => {
+                          const bvStr = classified.before[key] === undefined ? "undefined" : JSON.stringify(classified.before[key])?.slice(0, 60) || "null";
+                          const avStr = classified.after[key] === undefined ? "undefined" : JSON.stringify(classified.after[key])?.slice(0, 60) || "null";
+                          lines.push(`                ${key}: ${bvStr} → ${avStr}`);
+                        });
+                      }
+                      break;
+                    }
+                    default:
+                      lines.push(`            ${d.path}: ${JSON.stringify(d.before)?.slice(0, 80) || "undefined"} → ${JSON.stringify(d.after)?.slice(0, 80) || "undefined"}`);
                   }
                 });
               }
@@ -4303,66 +4334,71 @@
             // Summarize each var change
             e.diff.forEach((d) => {
               const varName = d.path || "value";
-              if (Array.isArray(d.before) && Array.isArray(d.after) && (isKeyedArray(d.before) || isKeyedArray(d.after))) {
-                // Array diff - summarize
-                const summary = summarizeArrayDiff(d.before, d.after);
-                lines.push(`        ${varName}:`);
-                summary.split("\n").forEach((line) => lines.push(`            ${line}`));
-              } else if (Array.isArray(d.after) && d.before === undefined && isKeyedArray(d.after)) {
-                // Init with array
-                lines.push(`        ${varName}: initialized with ${d.after.length} items`);
-                d.after.slice(0, 5).forEach((item) => lines.push(`            • ${getItemLabel(item)}`));
-                if (d.after.length > 5) lines.push(`            … and ${d.after.length - 5} more`);
-              } else if (d.after === undefined && d.before === undefined) {
-                // Skip no-op
-              } else {
-                // Simple value change - show compact
-                const beforeStr = d.before === undefined ? "undefined" : JSON.stringify(d.before);
-                const afterStr = d.after === undefined ? "undefined" : JSON.stringify(d.after);
-                // Truncate if too long
-                const maxLen = 80;
-                const beforeDisplay = beforeStr.length > maxLen ? beforeStr.slice(0, maxLen) + "..." : beforeStr;
-                const afterDisplay = afterStr.length > maxLen ? afterStr.slice(0, maxLen) + "..." : afterStr;
-                lines.push(`        ${varName}: ${beforeDisplay} → ${afterDisplay}`);
+              const classified = classifyDiffItem(d);
+              switch (classified.type) {
+                case "keyedArrayDiff": {
+                  const summary = summarizeArrayDiff(classified.before, classified.after);
+                  lines.push(`        ${varName}:`);
+                  summary.split("\n").forEach((line) => lines.push(`            ${line}`));
+                  break;
+                }
+                case "keyedArrayInit":
+                  lines.push(`        ${varName}: initialized with ${classified.after.length} items`);
+                  classified.after.slice(0, 5).forEach((item) => lines.push(`            • ${getItemLabel(item)}`));
+                  if (classified.after.length > 5) lines.push(`            … and ${classified.after.length - 5} more`);
+                  break;
+                case "noop":
+                  break;
+                default: {
+                  const beforeStr = d.before === undefined ? "undefined" : JSON.stringify(d.before);
+                  const afterStr = d.after === undefined ? "undefined" : JSON.stringify(d.after);
+                  const maxLen = 80;
+                  const beforeDisplay = beforeStr.length > maxLen ? beforeStr.slice(0, maxLen) + "..." : beforeStr;
+                  const afterDisplay = afterStr.length > maxLen ? afterStr.slice(0, maxLen) + "..." : afterStr;
+                  lines.push(`        ${varName}: ${beforeDisplay} → ${afterDisplay}`);
+                }
               }
             });
           }
 
           if (e.kind === "state:changes" && e.diffJson) {
             e.diffJson.forEach((d) => {
-              if (Array.isArray(d.before) && Array.isArray(d.after) && (isKeyedArray(d.before) || isKeyedArray(d.after))) {
-                const summary = summarizeArrayDiff(d.before, d.after);
-                lines.push(`        ${d.path}:`);
-                summary.split("\n").forEach((line) => lines.push(`            ${line}`));
-              } else if (Array.isArray(d.after) && d.before === undefined && isKeyedArray(d.after)) {
-                lines.push(`        ${d.path}: initialized with ${d.after.length} items`);
-                d.after.slice(0, 5).forEach((item) => lines.push(`            • ${getItemLabel(item)}`));
-                if (d.after.length > 5) lines.push(`            … and ${d.after.length - 5} more`);
-              } else if (Array.isArray(d.before) && d.after === undefined && isKeyedArray(d.before)) {
-                lines.push(`        ${d.path}: ${d.before.length} items → cleared`);
-              } else if (d.before && d.after && typeof d.before === "object" && typeof d.after === "object" && !Array.isArray(d.before) && !Array.isArray(d.after)) {
-                // Object diff - show which fields changed
-                const allKeys = new Set([...Object.keys(d.before), ...Object.keys(d.after)]);
-                const changedKeys = [];
-                allKeys.forEach((key) => {
-                  const bv = JSON.stringify(d.before[key]);
-                  const av = JSON.stringify(d.after[key]);
-                  if (bv !== av) changedKeys.push(key);
-                });
-                if (changedKeys.length === 0) {
-                  lines.push(`        ${d.path}: (no visible change)`);
-                } else {
+              const classified = classifyDiffItem(d);
+              switch (classified.type) {
+                case "keyedArrayDiff": {
+                  const summary = summarizeArrayDiff(classified.before, classified.after);
                   lines.push(`        ${d.path}:`);
-                  changedKeys.forEach((key) => {
-                    const bv = d.before[key];
-                    const av = d.after[key];
-                    const bvStr = bv === undefined ? "undefined" : JSON.stringify(bv)?.slice(0, 60) || "null";
-                    const avStr = av === undefined ? "undefined" : JSON.stringify(av)?.slice(0, 60) || "null";
-                    lines.push(`            ${key}: ${bvStr} → ${avStr}`);
-                  });
+                  summary.split("\n").forEach((line) => lines.push(`            ${line}`));
+                  break;
                 }
-              } else {
-                lines.push(`        ${d.path}: ${JSON.stringify(d.before)?.slice(0, 80) || "undefined"} → ${JSON.stringify(d.after)?.slice(0, 80) || "undefined"}`);
+                case "keyedArrayInit":
+                  lines.push(`        ${d.path}: initialized with ${classified.after.length} items`);
+                  classified.after.slice(0, 5).forEach((item) => lines.push(`            • ${getItemLabel(item)}`));
+                  if (classified.after.length > 5) lines.push(`            … and ${classified.after.length - 5} more`);
+                  break;
+                case "keyedArrayCleared":
+                  lines.push(`        ${d.path}: ${classified.before.length} items → cleared`);
+                  break;
+                case "objectDiff": {
+                  const allKeys = new Set([...Object.keys(classified.before), ...Object.keys(classified.after)]);
+                  const changedKeys = [];
+                  allKeys.forEach((key) => {
+                    if (JSON.stringify(classified.before[key]) !== JSON.stringify(classified.after[key])) changedKeys.push(key);
+                  });
+                  if (changedKeys.length === 0) {
+                    lines.push(`        ${d.path}: (no visible change)`);
+                  } else {
+                    lines.push(`        ${d.path}:`);
+                    changedKeys.forEach((key) => {
+                      const bvStr = classified.before[key] === undefined ? "undefined" : JSON.stringify(classified.before[key])?.slice(0, 60) || "null";
+                      const avStr = classified.after[key] === undefined ? "undefined" : JSON.stringify(classified.after[key])?.slice(0, 60) || "null";
+                      lines.push(`            ${key}: ${bvStr} → ${avStr}`);
+                    });
+                  }
+                  break;
+                }
+                default:
+                  lines.push(`        ${d.path}: ${JSON.stringify(d.before)?.slice(0, 80) || "undefined"} → ${JSON.stringify(d.after)?.slice(0, 80) || "undefined"}`);
               }
             });
           }
@@ -6692,6 +6728,51 @@
           const result = parseHandlerCode("some random code");
           assertEqual(result.type, "other");
           assertEqual(result.code, "some random code");
+        });
+
+        // =========================================================================
+        // TEST SUITE: classifyDiffItem
+        // =========================================================================
+        test("classifyDiffItem", "detects keyed array diff", () => {
+          const d = { before: [{id: 1, name: "a"}], after: [{id: 1, name: "b"}], path: "items" };
+          const result = classifyDiffItem(d);
+          assertEqual(result.type, "keyedArrayDiff");
+        });
+
+        test("classifyDiffItem", "detects keyed array init", () => {
+          const d = { before: undefined, after: [{id: 1}], path: "items" };
+          const result = classifyDiffItem(d);
+          assertEqual(result.type, "keyedArrayInit");
+        });
+
+        test("classifyDiffItem", "detects keyed array cleared", () => {
+          const d = { before: [{id: 1}], after: undefined, path: "items" };
+          const result = classifyDiffItem(d);
+          assertEqual(result.type, "keyedArrayCleared");
+        });
+
+        test("classifyDiffItem", "detects object diff", () => {
+          const d = { before: {x: 1}, after: {x: 2}, path: "config" };
+          const result = classifyDiffItem(d);
+          assertEqual(result.type, "objectDiff");
+        });
+
+        test("classifyDiffItem", "detects noop", () => {
+          const d = { before: undefined, after: undefined, path: "empty" };
+          const result = classifyDiffItem(d);
+          assertEqual(result.type, "noop");
+        });
+
+        test("classifyDiffItem", "detects scalar diff", () => {
+          const d = { before: "old", after: "new", path: "name" };
+          const result = classifyDiffItem(d);
+          assertEqual(result.type, "scalarDiff");
+        });
+
+        test("classifyDiffItem", "scalar for non-keyed arrays", () => {
+          const d = { before: [1, 2], after: [3, 4], path: "nums" };
+          const result = classifyDiffItem(d);
+          assertEqual(result.type, "scalarDiff");
         });
 
         // =========================================================================
