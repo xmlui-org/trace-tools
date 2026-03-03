@@ -2127,6 +2127,16 @@
         };
       }
 
+      /**
+       * Determine whether a trace item has enough content to display.
+       * Shared by groupSimilarTraces, renderPrettyView, and renderRawView.
+       */
+      function shouldIncludeTrace(item) {
+        const isStartup = item.traceId && item.traceId.startsWith("startup-");
+        const hasContent = item.summary.changeCount > 0 || item.summary.hasError || item.summary.startCount > 0 || item.summary.behavioralEventCount > 0;
+        return hasContent || isStartup;
+      }
+
       function buildTraceSummary(traceEntries) {
         const starts = traceEntries.filter((e) => e.kind === "handler:start");
         const error = traceEntries.find((e) => e.kind === "handler:error");
@@ -3259,10 +3269,7 @@
 
         items.forEach((item) => {
           if (item.type === "trace") {
-            // Skip traces with no meaningful content (but keep startup traces and traces with handlers)
-            const isStartup = item.traceId && item.traceId.startsWith("startup-");
-            const hasContent = item.summary.changeCount > 0 || item.summary.hasError || item.summary.startCount > 0 || item.summary.behavioralEventCount > 0;
-            if (!hasContent && !isStartup) return;
+            if (!shouldIncludeTrace(item)) return;
 
             if (!currentGroup) {
               currentGroup = { type: "trace-group", traces: [item] };
@@ -3321,9 +3328,7 @@
             }
           } else if (item.type === "trace") {
             // Should not happen after grouping, but handle just in case
-            const isStartup = item.traceId && item.traceId.startsWith("startup-");
-            const hasContent = item.summary.changeCount > 0 || item.summary.hasError || item.summary.startCount > 0 || item.summary.behavioralEventCount > 0;
-            if (!hasContent && !isStartup) return;
+            if (!shouldIncludeTrace(item)) return;
             blocks.push(renderTraceGroupPretty(item));
           } else if (item.type === "interaction") {
             blocks.push(renderInteractionPretty(item));
@@ -4037,10 +4042,7 @@
         let traceIndex = 0;
         processed.timelineItems.forEach((item) => {
           if (item.type === "trace") {
-            // Skip traces with no meaningful content (but keep startup traces and traces with handlers)
-            const isStartup = item.traceId && item.traceId.startsWith("startup-");
-            const hasContent = item.summary.changeCount > 0 || item.summary.hasError || item.summary.startCount > 0 || item.summary.behavioralEventCount > 0;
-            if (!hasContent && !isStartup) return;
+            if (!shouldIncludeTrace(item)) return;
             traceIndex++;
             lines.push(...renderTraceRaw(item, traceIndex));
             lines.push("");
@@ -6599,6 +6601,39 @@
           const xmlui = new XmluiSource(source, "test.xmlui");
           const btn = xmlui.findById("staticId");
           assertTrue(btn !== null, "Should find element with static id");
+        });
+
+        // =========================================================================
+        // TEST SUITE: shouldIncludeTrace
+        // =========================================================================
+        test("shouldIncludeTrace", "returns false for empty trace", () => {
+          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 0 } };
+          assertEqual(shouldIncludeTrace(item), false, "Empty trace should not be included");
+        });
+
+        test("shouldIncludeTrace", "returns true for trace with changes", () => {
+          const item = { traceId: "t-test", summary: { changeCount: 1, hasError: false, startCount: 0, behavioralEventCount: 0 } };
+          assertEqual(shouldIncludeTrace(item), true, "Trace with changes should be included");
+        });
+
+        test("shouldIncludeTrace", "returns true for trace with error", () => {
+          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: true, startCount: 0, behavioralEventCount: 0 } };
+          assertEqual(shouldIncludeTrace(item), true, "Trace with error should be included");
+        });
+
+        test("shouldIncludeTrace", "returns true for trace with handlers", () => {
+          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: false, startCount: 1, behavioralEventCount: 0 } };
+          assertEqual(shouldIncludeTrace(item), true, "Trace with handlers should be included");
+        });
+
+        test("shouldIncludeTrace", "returns true for trace with behavioral events", () => {
+          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 1 } };
+          assertEqual(shouldIncludeTrace(item), true, "Trace with behavioral events should be included");
+        });
+
+        test("shouldIncludeTrace", "returns true for empty startup trace", () => {
+          const item = { traceId: "startup-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 0 } };
+          assertEqual(shouldIncludeTrace(item), true, "Startup trace should always be included");
         });
 
         // =========================================================================
