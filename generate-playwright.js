@@ -557,7 +557,7 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
       const path = extractEndpointPath(api.endpoint || api);
       if (path && !seenPaths.has(path)) {
         seenPaths.add(path);
-        apiAwaits.push({ path, method: api.method, varName: `responsePromise${promiseCounter}_${apiAwaits.length}` });
+        apiAwaits.push({ path, method: api.method, varName: `responsePromise${promiseCounter}_${apiAwaits.length}`, apiResult: api.apiResult });
       }
     }
     for (const { path, varName, method } of apiAwaits) {
@@ -575,14 +575,41 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
   switch (step.action) {
     case 'startup':
       if (step.await?.api?.length > 0) {
-        const firstApi = step.await.api[0];
+        // Set up response captures for all APIs with apiResult assertions
+        const startupApis = step.await.api;
+        const apisWithResults = startupApis.filter(a => a.apiResult);
+        const seenStartupPaths = new Set();
+        const startupCaptures = [];
+        for (let ai = 0; ai < startupApis.length; ai++) {
+          const api = startupApis[ai];
+          const path = extractEndpointPath(api);
+          if (!path || seenStartupPaths.has(path)) continue;
+          seenStartupPaths.add(path);
+          if (api.apiResult) {
+            const varName = `startupResponse_${startupCaptures.length}`;
+            startupCaptures.push({ path, varName, apiResult: api.apiResult });
+            lines.push(`${indent}const ${varName} = page.waitForResponse(r => r.url().includes('${path}'));`);
+          }
+        }
+        // Wait for initial data load by combining goto with first response wait
+        const firstApi = startupApis[0];
         const endpoint = extractEndpointPath(firstApi);
-        // Wait for initial data load by combining goto with response wait
-        // Use './' so Playwright resolves relative to baseURL (preserves path like /ui/)
-        lines.push(`${indent}await Promise.all([`);
-        lines.push(`${indent}  page.waitForResponse(r => r.url().includes('${endpoint}')),`);
-        lines.push(`${indent}  page.goto('./'),`);
-        lines.push(`${indent}]);`);
+        if (startupCaptures.length > 0) {
+          lines.push(`${indent}await page.goto('./');`);
+          // Await all captured responses and store resolved values
+          for (const capture of startupCaptures) {
+            const resolvedVar = `resolved_${capture.varName}`;
+            lines.push(`${indent}const ${resolvedVar} = await ${capture.varName};`);
+            capture.resolvedVar = resolvedVar;
+          }
+        } else {
+          lines.push(`${indent}await Promise.all([`);
+          lines.push(`${indent}  page.waitForResponse(r => r.url().includes('${endpoint}')),`);
+          lines.push(`${indent}  page.goto('./'),`);
+          lines.push(`${indent}]);`);
+        }
+        // Emit API result assertions for startup
+        lines.push(...generateApiResultAssertions(startupCaptures, indent));
       } else {
         lines.push(`${indent}await page.goto('./');`);
       }
@@ -677,6 +704,12 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
     lines.push(`${indent}await ${apiAwaits[0].varName};`);
   } else if (apiAwaits.length > 1) {
     lines.push(`${indent}await Promise.all([${apiAwaits.map(a => a.varName).join(', ')}]);`);
+  }
+
+  // Emit API result assertions for non-startup steps
+  const awaitsWithResults = apiAwaits.filter(a => a.apiResult);
+  if (awaitsWithResults.length > 0) {
+    lines.push(...generateApiResultAssertions(awaitsWithResults, indent));
   }
 
   // Add navigation await conditions (skip for startup - already handled inline,
@@ -1050,6 +1083,44 @@ function generateSingleModalCode(modal, indent) {
     lines.push(`${indent}await page.getByRole('dialog').last().getByRole('button', { name: '${actionBtn.label}', exact: true }).click();`);
   } else {
     lines.push(`${indent}// TODO: resolve confirmation dialog (value=${JSON.stringify(modal.value)})`);
+  }
+  return lines;
+}
+
+/**
+ * Generate expect() assertions for API response bodies.
+ * Each capture has { varName, apiResult } where apiResult is either:
+ *   { type: 'snapshot', keys: [...], values: {...} }  — assert key-value pairs (skip __DATE__)
+ *   { type: 'rowcount', count: N, keys: [...] }       — assert array length + key schema
+ */
+function generateApiResultAssertions(captures, indent) {
+  const lines = [];
+  for (let i = 0; i < captures.length; i++) {
+    const { varName, apiResult, resolvedVar } = captures[i];
+    if (!apiResult) continue;
+
+    const bodyVar = `body_${varName}`;
+    const responseRef = resolvedVar || varName;
+    lines.push(`${indent}const ${bodyVar} = await ${responseRef}.json();`);
+
+    if (apiResult.type === 'snapshot') {
+      // Assert each non-date value
+      for (const [key, value] of Object.entries(apiResult.values)) {
+        if (value === '__DATE__') continue;
+        if (value === null) {
+          lines.push(`${indent}expect(${bodyVar}[0].${key}).toBeNull();`);
+        } else if (typeof value === 'string') {
+          const escaped = value.replace(/'/g, "\\'");
+          lines.push(`${indent}expect(${bodyVar}[0].${key}).toBe('${escaped}');`);
+        } else {
+          lines.push(`${indent}expect(${bodyVar}[0].${key}).toBe(${value});`);
+        }
+      }
+    } else if (apiResult.type === 'rowcount') {
+      lines.push(`${indent}expect(${bodyVar}.length).toBe(${apiResult.count});`);
+      const keysStr = apiResult.keys.map(k => `'${k}'`).join(', ');
+      lines.push(`${indent}expect(Object.keys(${bodyVar}[0]).sort()).toEqual([${keysStr}]);`);
+    }
   }
   return lines;
 }

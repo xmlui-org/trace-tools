@@ -5,6 +5,41 @@
 const { parseTrace } = require('./parse-trace');
 
 /**
+ * Summarize an API response for assertion generation.
+ * - Single-row (array length 1 or plain object): snapshot key-value pairs,
+ *   replacing date-shaped string values with '__DATE__'.
+ * - Multi-row (array length > 1): row count + key schema.
+ * - Empty/null: returns undefined (skip).
+ */
+function summarizeResult(result) {
+  if (result == null) return undefined;
+
+  const isDateLike = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v);
+
+  const scrubDates = obj => {
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) {
+      out[k] = isDateLike(v) ? '__DATE__' : v;
+    }
+    return out;
+  };
+
+  if (Array.isArray(result)) {
+    if (result.length === 0) return undefined;
+    if (result.length === 1) {
+      return { type: 'snapshot', keys: Object.keys(result[0]).sort(), values: scrubDates(result[0]) };
+    }
+    return { type: 'rowcount', count: result.length, keys: Object.keys(result[0]).sort() };
+  }
+
+  if (typeof result === 'object') {
+    return { type: 'snapshot', keys: Object.keys(result).sort(), values: scrubDates(result) };
+  }
+
+  return undefined;
+}
+
+/**
  * Resolve API method that may be an unresolved XMLUI expression.
  * The framework sometimes logs expressions like:
  *   {$queryParams.new == 'true' ? 'post' : 'put'}
@@ -494,7 +529,12 @@ function extractStepFromJsonLogs(trace) {
   if (!interaction && trace.traceId?.startsWith('startup-')) {
     const apiCalls = events
       .filter(e => e.kind === 'api:complete' && e.method)
-      .map(e => ({ method: resolveMethod(e.method, e.url || e.endpoint), endpoint: e.url || e.endpoint }));
+      .map(e => {
+        const entry = { method: resolveMethod(e.method, e.url || e.endpoint), endpoint: e.url || e.endpoint };
+        const summary = summarizeResult(e.result);
+        if (summary) entry.apiResult = summary;
+        return entry;
+      });
     return {
       action: 'startup',
       await: { api: apiCalls }
@@ -630,7 +670,14 @@ function extractStepFromJsonLogs(trace) {
 
   const apiCalls = events
     .filter(e => (e.kind === 'api:complete' || e.kind === 'api:start') && e.method)
-    .map(e => ({ method: resolveMethod(e.method, e.url || e.endpoint), endpoint: e.url || e.endpoint, status: e.status }));
+    .map(e => {
+      const entry = { method: resolveMethod(e.method, e.url || e.endpoint), endpoint: e.url || e.endpoint, status: e.status };
+      if (e.kind === 'api:complete') {
+        const summary = summarizeResult(e.result);
+        if (summary) entry.apiResult = summary;
+      }
+      return entry;
+    });
   if (apiCalls.length > 0) {
     awaitConditions.api = apiCalls;
   }
