@@ -5220,6 +5220,21 @@
             };
           },
 
+          nativeEvent(type, opts = {}) {
+            return {
+              kind: `native:${type}`,
+              eventName: type,
+              componentType: opts.componentType || "BigCalendar",
+              componentLabel: opts.componentLabel || "BigCalendar",
+              displayLabel: opts.displayLabel,
+              traceId: opts.traceId,
+              ts: opts.ts || TestFramework.ts(),
+              perfTs: opts.perfTs || TestFramework.perfTs(),
+              ownerFileId: opts.fileId,
+              sourceCharRange: opts.sourceCharRange,
+            };
+          },
+
           componentVarsInit(varNames, componentLabel, opts = {}) {
             return {
               kind: "component:vars:init",
@@ -6242,6 +6257,60 @@
         });
 
         // =========================================================================
+        // TEST SUITE: Native Event Traces
+        // =========================================================================
+        test("Native Events", "trace header shows displayLabel when interaction + native event co-occur", () => {
+          const traceId = TestFramework.interactionTraceId();
+          const events = [
+            TestFramework.events.interaction("click", "Next", { traceId, perfTs: 100 }),
+            TestFramework.events.nativeEvent("navigate", { traceId, displayLabel: "April 2026", perfTs: 101 }),
+          ];
+          const summary = buildTraceSummary(events);
+          assertContains(summary.componentText, "Next", "Should include interaction label");
+          assertContains(summary.componentText, "April 2026", "Should include native displayLabel");
+          assertContains(summary.componentText, "\u2192", "Should have arrow separator");
+        });
+
+        test("Native Events", "trace header built from native event when no interaction", () => {
+          const traceId = TestFramework.traceId();
+          const events = [
+            TestFramework.events.nativeEvent("viewChange", { traceId, displayLabel: "week", perfTs: 100 }),
+          ];
+          const summary = buildTraceSummary(events);
+          assertContains(summary.componentText, "BigCalendar", "Should include component type");
+          assertContains(summary.componentText, "viewChange", "Should include event name");
+          assertContains(summary.componentText, "week", "Should include displayLabel");
+        });
+
+        test("Native Events", "native-only traces not merged into polling", () => {
+          const startupTraceId = "startup-test";
+          const nativeTraceId = TestFramework.interactionTraceId();
+          const entries = [
+            // Startup trace with a loaded handler
+            TestFramework.events.handlerStart("loaded", { traceId: startupTraceId, perfTs: 100 }),
+            TestFramework.events.handlerComplete("loaded", { traceId: startupTraceId, perfTs: 110, duration: 10 }),
+            // Native-only trace (no handlers)
+            TestFramework.events.interaction("click", "Week", { traceId: nativeTraceId, perfTs: 200 }),
+            TestFramework.events.nativeEvent("viewChange", { traceId: nativeTraceId, displayLabel: "week", perfTs: 201 }),
+          ];
+          const processed = processAllEntries(entries);
+          const nativeTrace = processed.timelineItems.find(
+            item => item.type === "trace" && item.traceId === nativeTraceId
+          );
+          assertTrue(!!nativeTrace, "Native event trace should exist as its own trace");
+        });
+
+        test("Native Events", "native events counted as content in hasContent check", () => {
+          const traceId = TestFramework.interactionTraceId();
+          const events = [
+            TestFramework.events.interaction("click", "Month", { traceId, perfTs: 100 }),
+            TestFramework.events.nativeEvent("viewChange", { traceId, displayLabel: "month", perfTs: 101 }),
+          ];
+          const summary = buildTraceSummary(events);
+          assertTrue(summary.behavioralEventCount > 0, "Native events should count as behavioral");
+        });
+
+        // =========================================================================
         // TEST SUITE: Function Source Lookup
         // =========================================================================
         test("Function Source Lookup", "extractFunctionCalls finds standalone function calls", () => {
@@ -6530,6 +6599,244 @@
           const xmlui = new XmluiSource(source, "test.xmlui");
           const btn = xmlui.findById("staticId");
           assertTrue(btn !== null, "Should find element with static id");
+        });
+
+        // =========================================================================
+        // TEST SUITE: Trace Filtering
+        // =========================================================================
+        test("Trace Filtering", "empty trace is hidden in both views", () => {
+          // Trace with no state changes, no errors, no handlers, no behavioral events
+          const traceId = TestFramework.interactionTraceId();
+          const entries = [
+            TestFramework.events.interaction("click", "EmptyButton", { traceId, perfTs: 100 }),
+          ];
+          const processed = processAllEntries(entries);
+          const pretty = renderPrettyView(processed);
+          const raw = renderRawView(processed);
+          assertTrue(!pretty.includes("EmptyButton"), "Empty trace should be hidden in pretty view");
+          assertTrue(!raw.includes("EmptyButton"), "Empty trace should be hidden in raw view");
+        });
+
+        test("Trace Filtering", "trace with only state changes is shown", () => {
+          const traceId = TestFramework.interactionTraceId();
+          const entries = [
+            TestFramework.events.interaction("click", "SaveBtn", { traceId, perfTs: 100 }),
+            TestFramework.events.stateChange("click", [
+              { path: "saved", before: false, after: true }
+            ], { traceId, perfTs: 101 }),
+          ];
+          const processed = processAllEntries(entries);
+          const pretty = renderPrettyView(processed);
+          const raw = renderRawView(processed);
+          assertContains(pretty, "SaveBtn", "Trace with changes should appear in pretty view");
+          assertContains(raw, "SaveBtn", "Trace with changes should appear in raw view");
+        });
+
+        test("Trace Filtering", "trace with only error is shown", () => {
+          const traceId = TestFramework.interactionTraceId();
+          const entries = [
+            TestFramework.events.interaction("click", "ErrorBtn", { traceId, perfTs: 100 }),
+            TestFramework.events.handlerStart("click", { traceId, componentLabel: "ErrorBtn", perfTs: 101 }),
+            TestFramework.events.handlerError("click", new Error("boom"), { traceId, componentLabel: "ErrorBtn", perfTs: 102 }),
+          ];
+          const processed = processAllEntries(entries);
+          const pretty = renderPrettyView(processed);
+          const raw = renderRawView(processed);
+          assertContains(pretty, "ErrorBtn", "Trace with error should appear in pretty view");
+          assertContains(raw, "ErrorBtn", "Trace with error should appear in raw view");
+        });
+
+        test("Trace Filtering", "trace with only handlers is shown", () => {
+          const traceId = TestFramework.interactionTraceId();
+          const entries = [
+            TestFramework.events.interaction("click", "HandlerBtn", { traceId, perfTs: 100 }),
+            TestFramework.events.handlerStart("click", { traceId, componentLabel: "HandlerBtn", perfTs: 101 }),
+            TestFramework.events.handlerComplete("click", { traceId, componentLabel: "HandlerBtn", perfTs: 110, duration: 9 }),
+          ];
+          const processed = processAllEntries(entries);
+          const pretty = renderPrettyView(processed);
+          const raw = renderRawView(processed);
+          assertContains(pretty, "HandlerBtn", "Trace with handlers should appear in pretty view");
+          assertContains(raw, "HandlerBtn", "Trace with handlers should appear in raw view");
+        });
+
+        test("Trace Filtering", "trace with only behavioral events is shown", () => {
+          const traceId = TestFramework.interactionTraceId();
+          const entries = [
+            TestFramework.events.interaction("click", "NativeBtn", { traceId, perfTs: 100 }),
+            TestFramework.events.nativeEvent("viewChange", { traceId, displayLabel: "month", perfTs: 101 }),
+          ];
+          const processed = processAllEntries(entries);
+          const pretty = renderPrettyView(processed);
+          const raw = renderRawView(processed);
+          assertContains(pretty, "NativeBtn", "Trace with behavioral events should appear in pretty view");
+          assertContains(raw, "NativeBtn", "Trace with behavioral events should appear in raw view");
+        });
+
+        test("Trace Filtering", "startup trace shown even with no content", () => {
+          const traceId = "startup-test-empty";
+          const entries = [
+            // Startup trace with only a vars init (no handlers, no state changes, no errors)
+            TestFramework.events.componentVarsInit("isOpen", "Dialog", { traceId, perfTs: 100 }),
+          ];
+          const processed = processAllEntries(entries);
+          const pretty = renderPrettyView(processed);
+          const raw = renderRawView(processed);
+          assertContains(pretty, "Startup", "Empty startup trace should appear in pretty view");
+          assertContains(raw, "Startup", "Empty startup trace should appear in raw view");
+        });
+
+        // =========================================================================
+        // TEST SUITE: Trace Grouping
+        // =========================================================================
+        test("Trace Grouping", "single trace renders without ellipsis", () => {
+          const events = TestFramework.scenarios.buttonClick();
+          const processed = processAllEntries(events);
+          const grouped = groupSimilarTraces(processed.timelineItems);
+          const traceGroups = grouped.filter(g => g.type === "trace-group");
+          assertEqual(traceGroups.length, 1, "Should have 1 trace group");
+          assertEqual(traceGroups[0].traces.length, 1, "Group should have 1 trace");
+          const html = renderPrettyView(processed);
+          assertTrue(!html.includes("more similar"), "Single trace should not show ellipsis");
+        });
+
+        test("Trace Grouping", "two similar traces both render", () => {
+          const traceId1 = TestFramework.interactionTraceId();
+          const traceId2 = TestFramework.interactionTraceId();
+          const entries = [
+            TestFramework.events.interaction("click", "Refresh", { traceId: traceId1, perfTs: 100 }),
+            TestFramework.events.handlerStart("click", { traceId: traceId1, componentLabel: "Refresh", perfTs: 101 }),
+            TestFramework.events.handlerComplete("click", { traceId: traceId1, componentLabel: "Refresh", perfTs: 110, duration: 9 }),
+            TestFramework.events.interaction("click", "Refresh", { traceId: traceId2, perfTs: 200 }),
+            TestFramework.events.handlerStart("click", { traceId: traceId2, componentLabel: "Refresh", perfTs: 201 }),
+            TestFramework.events.handlerComplete("click", { traceId: traceId2, componentLabel: "Refresh", perfTs: 210, duration: 9 }),
+          ];
+          const processed = processAllEntries(entries);
+          const grouped = groupSimilarTraces(processed.timelineItems);
+          const traceGroups = grouped.filter(g => g.type === "trace-group");
+          assertEqual(traceGroups.length, 1, "Two similar traces should form 1 group");
+          assertEqual(traceGroups[0].traces.length, 2, "Group should have 2 traces");
+          const html = renderPrettyView(processed);
+          assertTrue(!html.includes("more similar"), "Two traces should not show ellipsis");
+        });
+
+        test("Trace Grouping", "3+ similar traces show ellipsis", () => {
+          const entries = [];
+          for (let i = 0; i < 4; i++) {
+            const traceId = TestFramework.interactionTraceId();
+            entries.push(
+              TestFramework.events.interaction("click", "Poll", { traceId, perfTs: 100 + i * 100 }),
+              TestFramework.events.handlerStart("click", { traceId, componentLabel: "Poll", perfTs: 101 + i * 100 }),
+              TestFramework.events.handlerComplete("click", { traceId, componentLabel: "Poll", perfTs: 110 + i * 100, duration: 9 }),
+            );
+          }
+          const processed = processAllEntries(entries);
+          const grouped = groupSimilarTraces(processed.timelineItems);
+          const traceGroups = grouped.filter(g => g.type === "trace-group");
+          assertEqual(traceGroups.length, 1, "4 similar traces should form 1 group");
+          assertEqual(traceGroups[0].traces.length, 4, "Group should have 4 traces");
+          const html = renderPrettyView(processed);
+          assertContains(html, "more similar", "3+ traces should show ellipsis");
+        });
+
+        test("Trace Grouping", "dissimilar traces not grouped together", () => {
+          const traceId1 = TestFramework.interactionTraceId();
+          const traceId2 = TestFramework.interactionTraceId();
+          const entries = [
+            TestFramework.events.interaction("click", "Save", { traceId: traceId1, perfTs: 100 }),
+            TestFramework.events.handlerStart("click", { traceId: traceId1, componentLabel: "Save", perfTs: 101 }),
+            TestFramework.events.handlerComplete("click", { traceId: traceId1, componentLabel: "Save", perfTs: 110, duration: 9 }),
+            TestFramework.events.interaction("click", "Delete", { traceId: traceId2, perfTs: 200 }),
+            TestFramework.events.handlerStart("click", { traceId: traceId2, componentLabel: "Delete", perfTs: 201 }),
+            TestFramework.events.handlerComplete("click", { traceId: traceId2, componentLabel: "Delete", perfTs: 210, duration: 9 }),
+          ];
+          const processed = processAllEntries(entries);
+          const grouped = groupSimilarTraces(processed.timelineItems);
+          const traceGroups = grouped.filter(g => g.type === "trace-group");
+          assertEqual(traceGroups.length, 2, "Dissimilar traces should form separate groups");
+          assertEqual(traceGroups[0].traces.length, 1, "Each group should have 1 trace");
+          assertEqual(traceGroups[1].traces.length, 1, "Each group should have 1 trace");
+        });
+
+        test("Trace Grouping", "non-trace item breaks grouping sequence", () => {
+          const traceId1 = TestFramework.interactionTraceId();
+          const traceId2 = TestFramework.interactionTraceId();
+          // Two similar traces separated by a standalone interaction
+          const entries = [
+            TestFramework.events.interaction("click", "Refresh", { traceId: traceId1, perfTs: 100 }),
+            TestFramework.events.handlerStart("click", { traceId: traceId1, componentLabel: "Refresh", perfTs: 101 }),
+            TestFramework.events.handlerComplete("click", { traceId: traceId1, componentLabel: "Refresh", perfTs: 110, duration: 9 }),
+            // Standalone interaction (no traceId matching a trace)
+            TestFramework.events.interaction("click", "Standalone", { perfTs: 150 }),
+            TestFramework.events.interaction("click", "Refresh", { traceId: traceId2, perfTs: 200 }),
+            TestFramework.events.handlerStart("click", { traceId: traceId2, componentLabel: "Refresh", perfTs: 201 }),
+            TestFramework.events.handlerComplete("click", { traceId: traceId2, componentLabel: "Refresh", perfTs: 210, duration: 9 }),
+          ];
+          const processed = processAllEntries(entries);
+          const grouped = groupSimilarTraces(processed.timelineItems);
+          // The standalone interaction should break the grouping
+          const traceGroups = grouped.filter(g => g.type === "trace-group");
+          assertEqual(traceGroups.length, 2, "Interrupted similar traces should form separate groups");
+        });
+
+        // =========================================================================
+        // TEST SUITE: Cross-View Consistency
+        // =========================================================================
+        test("Cross-View Consistency", "pretty and raw show same trace count for button click", () => {
+          const events = TestFramework.scenarios.buttonClick();
+          const processed = processAllEntries(events);
+          const pretty = renderPrettyView(processed);
+          const raw = renderRawView(processed);
+          const prettyCount = (pretty.match(/trace-group/g) || []).length;
+          const rawCount = (raw.match(/--- Trace \d+:/g) || []).length;
+          assertEqual(prettyCount, rawCount, "Pretty and raw should show same trace count");
+        });
+
+        test("Cross-View Consistency", "pretty and raw show same trace count for mixed scenario", () => {
+          const traceId1 = TestFramework.interactionTraceId();
+          const traceId2 = TestFramework.interactionTraceId();
+          const traceId3 = TestFramework.interactionTraceId();
+          const entries = [
+            // Trace with handler
+            TestFramework.events.interaction("click", "Save", { traceId: traceId1, perfTs: 100 }),
+            TestFramework.events.handlerStart("click", { traceId: traceId1, componentLabel: "Save", perfTs: 101 }),
+            TestFramework.events.handlerComplete("click", { traceId: traceId1, componentLabel: "Save", perfTs: 110, duration: 9 }),
+            // Trace with native event only
+            TestFramework.events.interaction("click", "Next", { traceId: traceId2, perfTs: 200 }),
+            TestFramework.events.nativeEvent("navigate", { traceId: traceId2, displayLabel: "April 2026", perfTs: 201 }),
+            // Empty trace (should be hidden in both)
+            TestFramework.events.interaction("click", "Empty", { traceId: traceId3, perfTs: 300 }),
+          ];
+          const processed = processAllEntries(entries);
+          const pretty = renderPrettyView(processed);
+          const raw = renderRawView(processed);
+          const prettyCount = (pretty.match(/trace-group/g) || []).length;
+          const rawCount = (raw.match(/--- Trace \d+:/g) || []).length;
+          assertEqual(prettyCount, rawCount, "Pretty and raw should show same trace count for mixed scenario");
+          // Both should show 2 traces (handler + native), not the empty one
+          assertEqual(rawCount, 2, "Should show 2 traces (handler + native event), not empty");
+        });
+
+        test("Cross-View Consistency", "startup trace appears in both views", () => {
+          const events = TestFramework.scenarios.startup();
+          const processed = processAllEntries(events);
+          const pretty = renderPrettyView(processed);
+          const raw = renderRawView(processed);
+          assertContains(pretty, "Startup", "Startup should appear in pretty view");
+          assertContains(raw, "Startup", "Startup should appear in raw view");
+        });
+
+        test("Cross-View Consistency", "native event displayLabel in both view headers", () => {
+          const traceId = TestFramework.interactionTraceId();
+          const entries = [
+            TestFramework.events.interaction("click", "Next", { traceId, perfTs: 100 }),
+            TestFramework.events.nativeEvent("navigate", { traceId, displayLabel: "April 2026", perfTs: 101 }),
+          ];
+          const processed = processAllEntries(entries);
+          const pretty = renderPrettyView(processed);
+          const raw = renderRawView(processed);
+          assertContains(pretty, "April 2026", "Pretty view should show displayLabel");
+          assertContains(raw, "April 2026", "Raw view should show displayLabel");
         });
 
         // =========================================================================
