@@ -11,6 +11,9 @@
 #   pre_spec_hook()  — function called before spec runs, receives spec name as $1
 #                      (use for exporting env vars like MOCK_PATH)
 
+# Resolve $0 to absolute path before any cd changes the working directory
+SELF="$APP_DIR/test.sh"
+
 # Defaults for anything the app didn't set
 TRACE_TOOLS="${TRACE_TOOLS:-$APP_DIR/trace-tools}"
 SPECS_DIR="${SPECS_DIR:-$APP_DIR/traces/specs}"
@@ -231,7 +234,7 @@ case "${1:-help}" in
       [ -f "$f" ] || continue
       name=$(basename "$f" .spec.ts)
       echo "--- Spec: $name ---"
-      "$0" spec "$name"
+      "$SELF" spec "$name"
       if [ $? -eq 0 ]; then
         PASS=$((PASS + 1))
       else
@@ -348,7 +351,7 @@ case "${1:-help}" in
       [ -f "$f" ] || continue
       name=$(basename "$f" .json)
       echo "--- Running: $name ---"
-      "$0" run "$name"
+      "$SELF" run "$name"
       if [ $? -eq 0 ]; then
         PASS=$((PASS + 1))
       else
@@ -377,7 +380,7 @@ case "${1:-help}" in
       [ -f "$f" ] || continue
       name=$(basename "$f" .spec.ts)
       echo "--- Spec: $name ---"
-      "$0" spec "$name"
+      "$SELF" spec "$name"
       if [ $? -eq 0 ]; then
         PASS=$((PASS + 1))
       else
@@ -392,7 +395,7 @@ case "${1:-help}" in
       [ -f "$f" ] || continue
       name=$(basename "$f" .json)
       echo "--- Baseline: $name ---"
-      "$0" run "$name"
+      "$SELF" run "$name"
       if [ $? -eq 0 ]; then
         PASS=$((PASS + 1))
       else
@@ -443,7 +446,7 @@ case "${1:-help}" in
     echo "  CONVERT: $NAME"
     echo "  Step 1/3 — Running spec to capture trace"
     echo "═══════════════════════════════════════════════════════════════"
-    "$0" spec "$NAME"
+    "$SELF" spec "$NAME"
     SPEC_EXIT=$?
     if [ $SPEC_EXIT -ne 0 ]; then
       echo "CONVERT FAILED — spec run failed"
