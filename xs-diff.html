@@ -2156,6 +2156,7 @@
           componentText = parts.join(" ");
         } else {
           const interaction = traceEntries.find((e) => e.kind === "interaction");
+          const nativeEvent = traceEntries.find((e) => e.kind?.startsWith("native:"));
           if (interaction) {
             const label = interaction.componentLabel || interaction.uid || "Unknown";
             const action = interaction.interaction || interaction.eventName || "";
@@ -2163,6 +2164,15 @@
             const hasOnlyTag = /^[a-z]+$/.test(label);
             const contextText = hasOnlyTag && detailTextContent && detailTextContent.length < 40 ? ` "${detailTextContent}"` : "";
             componentText = action ? `${label}${contextText} ${action}` : label + contextText;
+            // If there's also a native event with a displayLabel, append it
+            if (nativeEvent && nativeEvent.displayLabel) {
+              componentText += ` → "${nativeEvent.displayLabel}"`;
+            }
+          } else if (nativeEvent) {
+            const type = nativeEvent.componentType || nativeEvent.componentLabel || "Unknown";
+            const eventName = nativeEvent.eventName || nativeEvent.kind?.replace("native:", "") || "";
+            const displayLabel = nativeEvent.displayLabel ? ` "${nativeEvent.displayLabel}"` : "";
+            componentText = `${type} ${eventName}${displayLabel}`;
           }
         }
 
@@ -2923,14 +2933,16 @@
 
             // Get all handler:start events
             const handlers = traceEntries.filter(e => e.kind === "handler:start");
-            if (handlers.length === 0) {
-              // Trace with no handlers - skip (might be interaction-only)
+            const hasNativeEvents = traceEntries.some(e => e.kind?.startsWith("native:"));
+            if (handlers.length === 0 && !hasNativeEvents) {
+              // Trace with no handlers and no native events - skip (might be interaction-only)
               continue;
             }
 
             // Check if ALL handlers are "loaded" handlers (polling)
-            const allAreLoaded = handlers.every(h => h.eventName === "loaded");
-            if (allAreLoaded) {
+            // But don't merge native-event traces — they represent real user interactions
+            const allAreLoaded = handlers.length > 0 && handlers.every(h => h.eventName === "loaded");
+            if (allAreLoaded && !hasNativeEvents) {
               pollingTracesToMerge.push(traceId);
             }
           }
