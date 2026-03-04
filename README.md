@@ -66,7 +66,8 @@ This observability is valuable on its own. You can drop `xs-diff.html` into any 
 Every XMLUI app exposes `window._xsLogs` (interaction traces) and `window._xsSourceFiles` (component source). The `xs-diff.html` viewer reads these and presents:
 
 - **Pretty view** — a timeline of interactions, expandable to show API calls, state changes, handler timing, and ARIA metadata. Useful for debugging, performance analysis, and understanding how a journey flows through the engine.
-- **Raw view** — the full JSON trace, exportable for offline analysis or AI consumption. This is the same format used by the regression test pipeline.
+- **Raw view** — a textual representation of the trace.
+- **Export JSON** — download the trace as JSON for the regression test pipeline.
 
 To add the inspector to any XMLUI app:
 
