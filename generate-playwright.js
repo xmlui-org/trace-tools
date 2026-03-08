@@ -60,8 +60,43 @@ function generatePlaywright(distilled, options = {}) {
 
   let responsePromiseCounter = 0;
   let gotoEmitted = !!startupStep;
+  // Track GET endpoints seen so far — re-fetches of already-loaded data are
+  // non-deterministic and should not be awaited on replay.
+  const seenGetEndpoints = new Set();
+  // Seed with startup APIs (always GETs for initial data load)
+  if (startupStep?.await?.api) {
+    for (const api of startupStep.await.api) {
+      const p = extractEndpointPath(api.endpoint || api);
+      if (p) seenGetEndpoints.add(p);
+    }
+  }
   for (let si = 0; si < orderedSteps.length; si++) {
     const step = orderedSteps[si];
+
+    // Strip pure-GET refetches: if a non-startup, non-mutation step only has
+    // GETs to endpoints already seen in prior steps, those are DataSource
+    // re-fetches (non-deterministic) and should not be awaited.
+    if (step.action !== 'startup' && step.await?.api?.length > 0) {
+      const hasMutation = step.await.api.some(a =>
+        ['POST', 'PUT', 'DELETE', 'PATCH'].includes(a.method));
+      if (!hasMutation) {
+        const novelApis = step.await.api.filter(a => {
+          const p = extractEndpointPath(a.endpoint || a);
+          return p && !seenGetEndpoints.has(p);
+        });
+        if (novelApis.length === 0) {
+          // All GETs are refetches — drop them
+          step.await.api = [];
+        }
+      }
+      // If a step contains a file upload (setInputFiles), any non-mutation
+      // GETs are incidental DataSource loads, not user-triggered — drop them.
+      const hasFileUpload = step.valueChanges?.some(vc => vc.files?.length > 0);
+      if (hasFileUpload && !hasMutation) {
+        step.await.api = [];
+      }
+    }
+
     const stepLines = [];
     stepLines.push(...generateStepCode(step, fillPlan, responsePromiseCounter, si, ignoreLabels));
     // Increment counter by the number of deduplicated API promises used
@@ -72,6 +107,16 @@ function generatePlaywright(distilled, options = {}) {
         if (p) seenPaths.add(p);
       }
       responsePromiseCounter += Math.max(1, seenPaths.size);
+    }
+
+    // Track GET endpoints we've seen so far (for refetch detection)
+    if (step.await?.api?.length > 0) {
+      for (const api of step.await.api) {
+        if (!api.method || api.method === 'GET') {
+          const p = extractEndpointPath(api.endpoint || api);
+          if (p) seenGetEndpoints.add(p);
+        }
+      }
     }
 
     // After a step that awaits a mutating API response (POST/PUT/DELETE),
@@ -757,6 +802,17 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
   // textbox interaction, it's a standalone fill — generate fill() instead of assert.
   if (step.valueChanges?.length > 0) {
     for (const vc of step.valueChanges) {
+      // FileInput: generate setInputFiles when files metadata is present
+      if (vc.files && vc.files.length > 0) {
+        const fileNames = vc.files.map(f => `'../traces/fixtures/${f.name}'`).join(', ');
+        if (vc.files.length === 1) {
+          lines.push(`${indent}await page.locator('input[type="file"]').setInputFiles(${fileNames});`);
+        } else {
+          lines.push(`${indent}await page.locator('input[type="file"]').setInputFiles([${fileNames}]);`);
+        }
+        continue;
+      }
+
       if (vc.value == null) continue;
       const escaped = vc.value.replace(/'/g, "\\'");
       const vcComponent = vc.component; // e.g. "TextBox", "Slider"
