@@ -222,7 +222,81 @@ function formatReport(report) {
 /**
  * Extract semantic summary from trace for high-level comparison
  */
+function extractSemanticsFromDistilled(distilled) {
+  const steps = distilled.steps || [];
+
+  // Collect all APIs across steps
+  const allApis = steps.flatMap(s => (s.await?.api || []).map(a => ({
+    method: a.method,
+    endpoint: (a.endpoint || '').split('?')[0].replace(/^.*\/api/, ''),
+    status: a.status
+  })));
+  const uniqueApis = [...new Set(allApis.map(a => `${a.method} ${a.endpoint}`))].sort();
+
+  // Mutation counts
+  const mutationCounts = {};
+  allApis
+    .filter(a => ['POST', 'PUT', 'DELETE', 'PATCH'].includes(a.method))
+    .forEach(a => {
+      const key = `${a.method} ${a.endpoint}`;
+      mutationCounts[key] = (mutationCounts[key] || 0) + 1;
+    });
+
+  // Value changes
+  const allVcs = steps.flatMap(s => (s.valueChanges || []).map(vc => ({
+    component: vc.component,
+    value: vc.displayLabel != null ? String(vc.displayLabel) : undefined,
+    ariaName: vc.ariaName
+  })));
+  const lastValueByComponent = {};
+  for (const vc of allVcs) {
+    lastValueByComponent[vc.ariaName || vc.component] = vc;
+  }
+  const uniqueValueChanges = Object.values(lastValueByComponent)
+    .map(vc => `${vc.ariaName || vc.component}=${vc.value}`);
+
+  // Navigations
+  const allNavs = steps.flatMap(s => s.navigations || []);
+  const uniqueNavigations = [...new Set(allNavs.map(n => (n.to || n).split('?')[0]).filter(Boolean))];
+
+  // Modals
+  const confirmationDialogs = steps.flatMap(s => (s.modals || []).map(m => ({
+    title: m.title,
+    outcome: m.outcome || 'unknown'
+  })));
+
+  // Journey
+  const journey = steps
+    .filter(s => s.action !== 'keydown')
+    .map(s => {
+      const target = s.target?.label || s.target?.testId || s.target?.component || '';
+      const formData = s.target?.formData;
+      let line = `${s.action}: ${target}`;
+      if (formData?.name) line += ` → "${formData.name}"`;
+      return line;
+    });
+
+  return {
+    apis: uniqueApis,
+    apiCount: allApis.length,
+    apiErrors: [],
+    mutationCounts,
+    formSubmits: [],
+    navigations: uniqueNavigations,
+    contextMenus: [],
+    confirmationDialogs,
+    valueChanges: uniqueValueChanges,
+    appTraceShapes: {},
+    journey
+  };
+}
+
 function extractSemantics(input) {
+  // Handle distilled format ({ steps: [...] })
+  if (input && typeof input === 'object' && !Array.isArray(input) && input.steps) {
+    return extractSemanticsFromDistilled(input);
+  }
+
   // Get raw logs if we have distilled input
   let logs;
   if (Array.isArray(input)) {
@@ -230,6 +304,14 @@ function extractSemantics(input) {
   } else if (typeof input === 'string') {
     if (input.trim().startsWith('[')) {
       logs = JSON.parse(input);
+    } else if (input.trim().startsWith('{')) {
+      try {
+        const parsed = JSON.parse(input);
+        if (parsed.steps) return extractSemanticsFromDistilled(parsed);
+        logs = [parsed];
+      } catch (e) {
+        return null;
+      }
     } else {
       // Text format - can't extract semantics directly
       return null;
