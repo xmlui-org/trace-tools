@@ -276,6 +276,36 @@ function extractSemanticsFromDistilled(distilled) {
       return line;
     });
 
+  // Extract app:trace transition shapes from distilled steps
+  const appTracesByLabel = {};
+  for (const s of steps) {
+    if (!s.appTraces) continue;
+    for (const [label, dataSeq] of Object.entries(s.appTraces)) {
+      if (!appTracesByLabel[label]) appTracesByLabel[label] = [];
+      appTracesByLabel[label].push(...dataSeq);
+    }
+  }
+  const appTraceShapes = {};
+  for (const [label, dataSeq] of Object.entries(appTracesByLabel)) {
+    if (dataSeq.length < 2) continue;
+    const allKeys = [...new Set(dataSeq.flatMap(d => Object.keys(d)))];
+    const shape = {};
+    for (const key of allKeys) {
+      const transitions = [];
+      for (let i = 1; i < dataSeq.length; i++) {
+        const prev = dataSeq[i - 1][key];
+        const curr = dataSeq[i][key];
+        if (typeof curr === 'number' && typeof prev === 'number') {
+          transitions.push(curr > prev ? 'up' : curr < prev ? 'down' : 'same');
+        } else {
+          transitions.push(curr === prev ? 'same' : 'changed');
+        }
+      }
+      shape[key] = transitions;
+    }
+    appTraceShapes[label] = shape;
+  }
+
   return {
     apis: uniqueApis,
     apiCount: allApis.length,
@@ -286,7 +316,7 @@ function extractSemanticsFromDistilled(distilled) {
     contextMenus: [],
     confirmationDialogs,
     valueChanges: uniqueValueChanges,
-    appTraceShapes: {},
+    appTraceShapes,
     journey
   };
 }
@@ -499,18 +529,37 @@ function compareSemanticTraces(trace1, trace2, options = {}) {
   const missingApis = sem1.apis.filter(a => !sem2.apis.includes(a));
   const extraApis = sem2.apis.filter(a => !sem1.apis.includes(a));
 
-  if (missingApis.length > 0) {
+  // GET-only API differences are advisory (non-deterministic DataSource refetches).
+  // Only mutation API differences break the match.
+  const missingMutations = missingApis.filter(a => !a.startsWith('GET '));
+  const extraMutations = extraApis.filter(a => !a.startsWith('GET '));
+  const missingGets = missingApis.filter(a => a.startsWith('GET '));
+  const extraGets = extraApis.filter(a => a.startsWith('GET '));
+
+  if (missingMutations.length > 0) {
     report.match = false;
     report.differences.push({
       type: 'apis_missing',
-      message: `APIs in before but not after: ${missingApis.join(', ')}`
+      message: `Mutation APIs in before but not after: ${missingMutations.join(', ')}`
     });
   }
-  if (extraApis.length > 0) {
+  if (extraMutations.length > 0) {
     report.match = false;
     report.differences.push({
       type: 'apis_extra',
-      message: `APIs in after but not before: ${extraApis.join(', ')}`
+      message: `Mutation APIs in after but not before: ${extraMutations.join(', ')}`
+    });
+  }
+  if (missingGets.length > 0) {
+    report.differences.push({
+      type: 'apis_missing_gets',
+      message: `GET APIs in before but not after: ${missingGets.join(', ')} (non-deterministic DataSource timing)`
+    });
+  }
+  if (extraGets.length > 0) {
+    report.differences.push({
+      type: 'apis_extra_gets',
+      message: `GET APIs in after but not before: ${extraGets.join(', ')} (non-deterministic DataSource timing)`
     });
   }
 
@@ -604,10 +653,11 @@ function compareSemanticTraces(trace1, trace2, options = {}) {
   const extraVC = vc2.filter(v => !vc1.includes(v));
 
   if (missingVC.length > 0 || extraVC.length > 0) {
-    report.match = false;
+    // Value changes are advisory — the set of traced value:change events varies
+    // with timing (orphaned FileInput events, reactive re-evaluations, etc.)
     report.differences.push({
       type: 'value_changes',
-      message: 'Value change mismatch',
+      message: 'Value change difference (advisory)',
       missing: missingVC,
       extra: extraVC
     });

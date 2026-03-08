@@ -570,7 +570,7 @@ function extractStepFromJsonLogs(trace) {
 
   // Handle startup (no interaction, starts with startup- traceId)
   if (!interaction && trace.traceId?.startsWith('startup-')) {
-    const apiCalls = events
+    const rawApis = events
       .filter(e => e.kind === 'api:complete' && e.method)
       .map(e => {
         const entry = { method: resolveMethod(e.method, e.url || e.endpoint), endpoint: e.url || e.endpoint };
@@ -578,10 +578,30 @@ function extractStepFromJsonLogs(trace) {
         if (summary) entry.apiResult = summary;
         return entry;
       });
-    return {
+    // Deduplicate by method + endpoint base path
+    const seen = new Set();
+    const apiCalls = [];
+    for (const api of rawApis) {
+      const key = `${api.method} ${(api.endpoint || '').split('?')[0]}`;
+      if (!seen.has(key)) { seen.add(key); apiCalls.push(api); }
+    }
+
+    // Capture app:trace events from startup
+    const startupAppTraces = events.filter(e => e.kind === 'app:trace' && e.data);
+    const startupStep = {
       action: 'startup',
       await: { api: apiCalls }
     };
+    if (startupAppTraces.length > 0) {
+      const byLabel = {};
+      for (const e of startupAppTraces) {
+        const label = e.label || 'unknown';
+        if (!byLabel[label]) byLabel[label] = [];
+        byLabel[label].push(e.data);
+      }
+      startupStep.appTraces = byLabel;
+    }
+    return startupStep;
   }
 
   if (!interaction) {
@@ -711,7 +731,7 @@ function extractStepFromJsonLogs(trace) {
   // Extract await conditions
   const awaitConditions = {};
 
-  const apiCalls = events
+  const rawApiCalls = events
     .filter(e => (e.kind === 'api:complete' || e.kind === 'api:start') && e.method)
     .map(e => {
       const entry = { method: resolveMethod(e.method, e.url || e.endpoint), endpoint: e.url || e.endpoint, status: e.status };
@@ -721,6 +741,16 @@ function extractStepFromJsonLogs(trace) {
       }
       return entry;
     });
+  // Deduplicate by method + endpoint (base path without query)
+  const apiSeen = new Set();
+  const apiCalls = [];
+  for (const api of rawApiCalls) {
+    const key = `${api.method} ${(api.endpoint || '').split('?')[0]}`;
+    if (!apiSeen.has(key)) {
+      apiSeen.add(key);
+      apiCalls.push(api);
+    }
+  }
   if (apiCalls.length > 0) {
     awaitConditions.api = apiCalls;
   }
@@ -765,6 +795,19 @@ function extractStepFromJsonLogs(trace) {
       byComponent.set(vc.component, entry);
     }
     step.valueChanges = Array.from(byComponent.values());
+  }
+
+  // Capture app:trace events — user-defined trace points emitted via pushXsLog.
+  // Group by label, record the data sequence for transition-shape comparison.
+  const appTraces = events.filter(e => e.kind === 'app:trace' && e.data);
+  if (appTraces.length > 0) {
+    const byLabel = {};
+    for (const e of appTraces) {
+      const label = e.label || 'unknown';
+      if (!byLabel[label]) byLabel[label] = [];
+      byLabel[label].push(e.data);
+    }
+    step.appTraces = byLabel;
   }
 
   // Capture submenu:open events — these fire during the contextmenu trace

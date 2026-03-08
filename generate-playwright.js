@@ -146,7 +146,8 @@ function generatePlaywright(distilled, options = {}) {
           } else if (nt.ariaRole === 'button') {
             // Buttons may be disabled during state transitions (e.g. server restart);
             // wait for them to be enabled, not just present in the DOM.
-            stepLines.push(`  await expect(page.getByRole('button', { name: '${nt.ariaName}', exact: true })).toBeEnabled({ timeout: 15000 });`);
+            const inList = nt.component === 'List' || nt.component === 'Table';
+            stepLines.push(`  await expect(page.getByRole('button', { name: '${nt.ariaName}', exact: true })${inList ? '.first()' : ''}).toBeEnabled({ timeout: 15000 });`);
           } else {
             stepLines.push(`  await page.getByRole('${nt.ariaRole}', { name: '${nt.ariaName}', exact: true }).waitFor();`);
           }
@@ -944,7 +945,11 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
   // sticky submit buttons drop out of sticky position and clear any fixed
   // app header that overlaps them.
   if (ariaRole === 'button' && ariaName) {
-    lines.push(`${indent}await page.getByRole('button', { name: '${ariaName}', exact: true }).evaluate(node => {`);
+    // Buttons inside repeating containers (List, Table) need .first() to avoid
+    // strict mode violations when multiple items share the same button label.
+    const inList = step.target?.component === 'List' || step.target?.component === 'Table';
+    const locator = `page.getByRole('button', { name: '${ariaName}', exact: true })${inList ? '.first()' : ''}`;
+    lines.push(`${indent}await ${locator}.evaluate(node => {`);
     lines.push(`${indent}  let el = node.parentElement;`);
     lines.push(`${indent}  while (el && el !== document.documentElement) {`);
     lines.push(`${indent}    if (el.scrollHeight > el.clientHeight) { el.scrollTop = 0; break; }`);
@@ -952,7 +957,7 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
     lines.push(`${indent}  }`);
     lines.push(`${indent}  window.scrollTo(0, 0);`);
     lines.push(`${indent}});`);
-    lines.push(`${indent}await page.getByRole('button', { name: '${ariaName}', exact: true }).${method}();`);
+    lines.push(`${indent}await ${locator}.${method}();`);
     return lines;
   }
 
