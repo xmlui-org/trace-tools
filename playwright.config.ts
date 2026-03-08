@@ -17,7 +17,7 @@ export default defineConfig({
   timeout: 60000,
   use: {
     baseURL,
-    headless: false, // Set to true for CI
+    headless: !!process.env.CI,
     trace: 'on-first-retry',
     viewport: { width: 1440, height: 900 },
     ...(process.env.PLAYWRIGHT_VIDEO === 'on' ? { video: 'on' } : {}),
