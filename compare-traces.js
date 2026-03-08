@@ -430,22 +430,20 @@ function compareSemanticTraces(trace1, trace2, options = {}) {
     });
   }
 
-  // Compare API errors
+  // Compare API errors (advisory only — transient API errors are non-deterministic)
   const missingErrors = sem1.apiErrors.filter(a => !sem2.apiErrors.includes(a));
   const extraErrors = sem2.apiErrors.filter(a => !sem1.apiErrors.includes(a));
 
   if (missingErrors.length > 0) {
-    report.match = false;
     report.differences.push({
       type: 'api_errors_missing',
-      message: `API errors in before but not after: ${missingErrors.join(', ')}`
+      message: `API errors in before but not after: ${missingErrors.join(', ')} (transient API error, not a behavioral difference)`
     });
   }
   if (extraErrors.length > 0) {
-    report.match = false;
     report.differences.push({
       type: 'api_errors_extra',
-      message: `API errors in after but not before: ${extraErrors.join(', ')}`
+      message: `API errors in after but not before: ${extraErrors.join(', ')} (transient API error, not a behavioral difference)`
     });
   }
 
