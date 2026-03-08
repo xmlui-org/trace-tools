@@ -11,6 +11,8 @@ const appConfig = fs.existsSync(appConfigPath)
 
 const baseURL = process.env.BASE_URL || appConfig.baseURL || 'http://localhost:5173';
 const hasAuth = !!appConfig.auth;
+const pregenAuth = appConfig.auth?.pregenerated;
+const storageStatePath = './.auth-state.json';
 
 export default defineConfig({
   testDir: '.',
@@ -23,7 +25,7 @@ export default defineConfig({
     ...(process.env.PLAYWRIGHT_VIDEO === 'on' ? { video: 'on' } : {}),
   },
   projects: [
-    ...(hasAuth ? [{
+    ...(hasAuth && !pregenAuth ? [{
       name: 'setup',
       testMatch: /auth-setup\.ts/,
       use: { headless: true },
@@ -32,9 +34,9 @@ export default defineConfig({
       name: 'chromium',
       use: {
         browserName: 'chromium' as const,
-        ...(hasAuth ? { storageState: './.auth-state.json' } : {}),
+        ...(hasAuth ? { storageState: storageStatePath } : {}),
       },
-      ...(hasAuth ? { dependencies: ['setup'] } : {}),
+      ...(hasAuth && !pregenAuth ? { dependencies: ['setup'] } : {}),
     },
   ],
 });
