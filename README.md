@@ -12,6 +12,7 @@
 - [Server state: the file tree your tests need](#server-state-the-file-tree-your-tests-need)
 - [Capturing a trace](#capturing-a-trace)
 - [Walkthrough: capturing and testing user journeys](#walkthrough-capturing-and-testing-user-journeys)
+  - [Distilled baselines: the gold standard](#distilled-baselines-the-gold-standard)
 - [Commands](#commands)
 - [Video recording](#video-recording)
 - [Reading the test output](#reading-the-test-output)
@@ -93,9 +94,11 @@ Trace-tools provides two complementary ways to test XMLUI apps: **`run`** (basel
 
 - **A human** (or an AI) performs the journey once to create a baseline trace. This can be done by clicking through the app with the XMLUI inspector open, or by describing the journey and letting AI generate a spec. Either way, the result is a JSON trace file saved to `traces/baselines/`.
 
-- **The pipeline** (`distill-trace.js` → `generate-playwright.js`) reads the baseline and auto-generates a Playwright test. It extracts interaction steps (clicks, form fills, context menus), infers Playwright selectors from ARIA roles and accessible names, and inserts API response waiters to handle async timing. The generated test is ephemeral — created, run, and discarded on each invocation.
+- **The distiller** (`distill-trace.js`) transforms raw traces into a compact, canonical format — the **distilled baseline**. This is the gold standard for check-in. A distilled baseline contains only the semantic essentials: interaction steps, API calls (deduplicated per step), value changes, app:trace data, navigation, and modals. Raw traces can be 100+ MB; distilled baselines are typically 5–30 KB. The `save`, `update`, and `convert` commands all distill automatically — you never check in raw traces.
 
-- **The comparator** (`compare-traces.js`) diffs the baseline trace against the newly captured trace. It checks that the same API endpoints were called with the same methods, the same forms were submitted, and the same pages were navigated. Cosmetic differences (timing, extra GETs from polling) are ignored.
+- **The generator** (`generate-playwright.js`) reads the distilled baseline and auto-generates a Playwright test. It extracts interaction steps (clicks, form fills, file uploads, context menus), infers Playwright selectors from ARIA roles and accessible names, and inserts API response waiters to handle async timing. The generated test is ephemeral — created, run, and discarded on each invocation.
+
+- **The comparator** (`compare-traces.js`) diffs the distilled baseline against the newly captured trace. It checks that the same mutation API endpoints were called with the same methods and counts, the same forms were submitted, and the same pages were navigated. GET-only API differences, transient API errors, value change variations, and app:trace shape differences are reported as advisory — they don't break the match.
 
 **How to create a baseline:**
 
@@ -138,7 +141,7 @@ Auto-generated tests now include assertions derived from the trace data:
 
 Hand-written specs are still needed for:
 
-- **Browser-native interactions** — file uploads via drag-and-drop or OS file picker require `addInitScript` mocking that can't be derived from traces.
+- **Drag-and-drop interactions** — drag-and-drop between elements requires explicit Playwright orchestration that can't be derived from traces. (Note: file uploads via `FileInput` now work in baseline mode — the engine traces file selection events and the generator emits `setInputFiles`.)
 - **Tree item presence** — asserting that folders appear/disappear in the tree sidebar (tree structure is not yet in `state:changes`).
 - **Complex conditional flows** — branching on dialog content with targeted recovery logic.
 - **Targeted waits and retries** — explicit synchronization for flaky async operations.
@@ -217,7 +220,7 @@ your-app/
 |------|-------------|---------|
 | `test.sh` | Yes | App-level config + `source trace-tools/test-base.sh` |
 | `app-config.json` | Yes (if needed) | Base URL and auth configuration |
-| `traces/baselines/*.json` | Yes | Reference traces — the "known good" behavior |
+| `traces/baselines/*.json` | Yes | Distilled baselines — the "known good" behavior (5–30 KB each) |
 | `traces/baselines/ignore-apis.txt` | Yes (if needed) | APIs to exclude from semantic comparison |
 | `traces/baselines/ignore-labels.txt` | Yes (if needed) | Labels to exclude from content assertions |
 | `traces/specs/*.spec.ts` | Yes | Playwright test specs (hand-written or generated) |
@@ -235,7 +238,7 @@ your-app/
 └── trace-tools/                  # git clone https://github.com/xmlui-org/trace-tools
     ├── test-base.sh              #   Shared test logic — sourced by app's test.sh
     ├── generate-playwright.js    #   Baseline → Playwright test generator
-    ├── distill-trace.js          #   Raw trace → interaction steps
+    ├── distill-trace.js          #   Raw trace → distilled baseline (canonical format)
     ├── compare-traces.js         #   Semantic diff (APIs, forms, navigation)
     ├── playwright.config.ts      #   Reads app-config.json for baseURL + auth
     └── xs-diff.html              #   Inspector viewer — copy to app's public/
@@ -306,12 +309,10 @@ This journey navigates to USERS, selects user "elvis", disables the account, the
 ./test.sh save ~/Downloads/enable-disable-user.json enable-disable-user
 ```
 
-This copies the trace into the baselines directory and prints a summary:
+This distills the trace and saves the canonical format:
 
 ```
-Saved baseline: enable-disable-user
-Journey: 10 steps, 143 events
-  APIs: GET /groups, GET /license, GET /settings, GET /status, GET /users, PUT /users/elvis
+Saved baseline: enable-disable-user (distilled)
 ```
 
 The file is now at:
@@ -390,6 +391,12 @@ traces/baselines/rename-file-roundtrip.json
 ./test.sh run rename-file-roundtrip
 ```
 
+### Distilled baselines: the gold standard
+
+However a baseline is created — manual Inspector capture, hand-written spec via `convert`, or AI-generated spec — the `save`, `update`, and `convert` commands all run the distiller before writing. The checked-in baseline is always in distilled format: a compact JSON object with `{ steps: [...] }` containing only interaction steps, deduplicated API calls, value changes, app:trace data, navigation, and modals.
+
+Raw Inspector exports can be 100+ MB (with `state:changes`, `component:vars:init`, etc.). Distilled baselines are typically 5–30 KB. They're diffable, reviewable, and origin-agnostic — you can't tell whether a baseline came from a manual capture or a Playwright run.
+
 ### Building a library of baselines
 
 Each journey you capture becomes a named baseline. Over time, the baselines directory grows into a regression test suite:
@@ -431,28 +438,40 @@ This copies `traces/runs/enable-disable-user.json` to `traces/baselines/enable-d
 
 ## Commands
 
-### `./test.sh test-all`
+### `./test.sh run-all` (recommended for CI)
 
-Runs everything — all specs, then all baselines — and reports a combined summary.
+Runs every baseline in `traces/baselines/` and reports a summary. This is the recommended CI command — baselines are the gold standard, whether originally captured manually or via `convert` from a hand-written spec.
 
 ```bash
-./test.sh test-all
+./test.sh run-all
 ```
 
 ```
---- Spec: navigation ---
-PASS — Spec completed successfully
+--- Running: search-roundtrip ---
+PASS — Journey completed successfully
+SEMANTIC: PASS — Same APIs, forms, and navigation
 
---- Spec: copy-paste-and-move ---
-PASS — Spec completed successfully
+--- Running: pick-roundtrip ---
+PASS — Journey completed successfully
+SEMANTIC: PASS — Same APIs, forms, and navigation
 
---- Baseline: paste-conflict-keep-both ---
+--- Running: capture-roundtrip ---
 PASS — Journey completed successfully
 SEMANTIC: PASS — Same APIs, forms, and navigation
 
 ═══════════════════════════════════════════════════════════════
   Results: 3 passed, 0 failed
 ═══════════════════════════════════════════════════════════════
+```
+
+Specs (`spec-all`) are authoring tools — they exist to capture traces that become baselines. CI should run baselines, not specs.
+
+### `./test.sh test-all`
+
+Runs everything — all specs, then all baselines — and reports a combined summary. Useful locally when developing specs and baselines together.
+
+```bash
+./test.sh test-all
 ```
 
 Failed tests are prefixed with their mode (`spec:` or `run:`) so you can tell which kind failed.
@@ -485,10 +504,10 @@ Generates a Playwright test from a baseline, runs it, captures a new trace, and 
 
 What happens under the hood:
 
-1. **Generate**: `generate-playwright.js` reads `traces/baselines/<journey>.json`, distills the raw trace into interaction steps using `distill-trace.js`, and emits a `.spec.ts` file with Playwright selectors derived from ARIA roles and accessible names.
-2. **Run**: Playwright executes the generated test. For apps with auth, a headless setup project logs in first and saves browser state. The test replays each step (clicks, form fills, waits for API responses) and captures a new trace via the XMLUI inspector.
+1. **Generate**: `generate-playwright.js` reads the distilled baseline at `traces/baselines/<journey>.json` and emits a `.spec.ts` file with Playwright selectors derived from ARIA roles and accessible names, API response waiters, file upload actions, and form fills.
+2. **Run**: Playwright executes the generated test. For apps with auth, browser state is injected from `.auth-state.json`. The test replays each step (clicks, form fills, file uploads, waits for API responses) and captures a new trace via the XMLUI inspector.
 3. **Save**: The new trace is saved to `traces/runs/<journey>.json`.
-4. **Compare**: `compare-traces.js` compares the baseline and capture semantically — same API calls (method + endpoint), same form submissions, same navigation. It ignores timing, DOM details, and event ordering differences.
+4. **Compare**: `compare-traces.js` compares the distilled baseline against the captured trace semantically — same mutation API calls (method + endpoint + count), same form submissions, same navigation. GET-only API differences, transient API errors, value change variations, and app:trace shape differences are advisory.
 5. **Clean up**: The generated `.spec.ts` file is deleted.
 
 The exit code is 0 if the semantic comparison passes, even if a Playwright selector failed. This means accessibility gaps (elements without proper ARIA roles) don't block the regression check.
@@ -516,29 +535,29 @@ Specs:
   file-operations
 
 Baseline-based tests (recorded journeys):
-  paste-conflict-keep-both (139 events)
-  rename-file-roundtrip (87 events)
+  paste-conflict-keep-both (10 steps)
+  rename-file-roundtrip (6 steps)
 ```
 
 ### `./test.sh save <trace.json> <journey-name>`
 
-Saves an exported trace as a named baseline.
+Distills an exported trace and saves it as a named baseline.
 
 ```bash
 ./test.sh save ~/Downloads/paste-conflict-keep-both.json paste-conflict-keep-both
 ```
 
-This copies the trace file to `traces/baselines/<journey-name>.json` and prints a journey summary showing the steps, event count, and API calls. The source file (typically in `~/Downloads/`) is left unchanged.
+This distills the raw trace into the canonical format (interaction steps, deduplicated APIs, value changes, app:traces) and writes it to `traces/baselines/<journey-name>.json`. The source file (typically in `~/Downloads/`) is left unchanged. The distilled baseline is typically 5–30 KB regardless of raw trace size.
 
 ### `./test.sh update <journey-name>`
 
-Promotes the latest capture to become the new baseline.
+Distills the latest capture and promotes it to become the new baseline.
 
 ```bash
 ./test.sh update paste-conflict-keep-both
 ```
 
-Use this when the app's behavior has intentionally changed — a new API endpoint, a different form field, an added navigation step. The capture from the most recent `run` is copied to `traces/baselines/<journey>.json`, replacing the old baseline. Commit the updated baseline.
+Use this when the app's behavior has intentionally changed — a new API endpoint, a different form field, an added navigation step. The capture from the most recent `run` is distilled and written to `traces/baselines/<journey>.json`, replacing the old baseline. Commit the updated baseline.
 
 ### `./test.sh convert <name>`
 
@@ -551,8 +570,8 @@ Converts a hand-written spec into a generated baseline spec. This is the bridge 
 What happens under the hood:
 
 1. **Run spec**: Runs `./test.sh spec <name>` to execute the hand-written spec and capture a trace
-2. **Save baseline**: Copies the captured trace to `traces/baselines/<name>.json`
-3. **Generate**: Runs `generate-playwright.js` on the baseline to produce a Playwright spec
+2. **Distill and save baseline**: Distills the captured trace into canonical format and saves to `traces/baselines/<name>.json`
+3. **Generate**: Runs `generate-playwright.js` on the distilled baseline to produce a Playwright spec
 4. **Output**: Saves the result as `traces/specs/generated_<name>.spec.ts`
 
 The generated spec can be compared side-by-side against the hand-written spec to see what the auto-generator handles and what it misses — useful for identifying engine gaps (missing toast events, modal semantics, etc.) and for validating that generator improvements produce correct output.
@@ -650,24 +669,31 @@ Most browser errors (400/404 from existence checks, React DOM nesting warnings) 
 
 ## How semantic comparison works
 
-The `compare` and `run` commands use `compare-traces.js` to check whether two traces represent the same behavior. It compares:
+The `compare` and `run` commands use `compare-traces.js` to check whether two traces represent the same behavior. Baselines are always in distilled format; captured traces from Playwright runs are distilled on the fly before comparison.
 
-- **API calls**: Same HTTP methods and endpoint paths (e.g. `GET /users`, `PUT /users/elvis`)
-- **API errors**: Same set of endpoints that returned error responses (409 conflict, 417 not-empty, etc.). These are logged as `api:error` events and indicate error-handling code paths like conflict dialogs or retry logic.
-- **Mutation counts**: Same number of successful POST/PUT/DELETE/PATCH calls per endpoint. A journey that deletes 2 files must always delete 2 files — not 1, not 3. GET counts are excluded because they vary with timing (refresh, polling).
+**Match-breaking** (these cause SEMANTIC: FAIL):
+
+- **Mutation API calls**: Same POST/PUT/DELETE/PATCH endpoints must appear in both traces
+- **Mutation counts**: Same number of successful mutations per endpoint. A journey that deletes 2 files must always delete 2 files — not 1, not 3.
 - **Form submissions**: Same number of submits with the same form data transformations
 - **Navigation**: Same page transitions
+- **Confirmation dialogs**: Same modal outcomes (confirm/cancel)
+
+**Advisory** (reported but don't break the match):
+
+- **GET-only API differences**: Non-deterministic DataSource timing means different runs may capture different sets of GET calls
+- **Transient API errors**: Intermittent network errors on GET endpoints
+- **Value changes**: The set of traced `value:change` events varies with timing (orphaned FileInput events, reactive re-evaluations)
+- **App:trace shapes**: Reactive evaluation counts are inherently non-deterministic (see [App:trace shapes are advisory](#apptrace-shapes-are-advisory))
 
 It does **not** compare:
 
 - Timing or performance
 - DOM structure or CSS
 - Event ordering within a single step
-- Startup data fetches (initial page load API calls)
-- GET request counts (vary with refresh/polling)
-- HTTP status codes on error responses (the XMLUI runtime logs `api:error` without the status code)
+- HTTP status codes on error responses
 
-This means a refactoring that restructures components but preserves the same user-visible behavior will pass the semantic comparison. But changing the number of mutations (e.g. adding an extra delete) or introducing/removing an error path (e.g. a 409 conflict) will fail.
+This means a refactoring that restructures components but preserves the same user-visible behavior will pass the semantic comparison. But changing the number of mutations (e.g. adding an extra delete) or introducing/removing a confirmation dialog will fail.
 
 ### Ignoring non-deterministic APIs
 
@@ -993,7 +1019,7 @@ Apps that don't require login (e.g. myWorkDrive-Client) omit this file entirely.
 
 ## Known limitations
 
-- **Browser-native interactions.** File uploads via drag-and-drop or OS file picker produce no trace events — the interaction happens outside the DOM. Tests that require file uploads need hand-written specs with `addInitScript` mocking. Baseline mode cannot handle these journeys.
+- **Browser-native interactions.** Drag-and-drop and OS file picker interactions happen outside the DOM. However, XMLUI's `FileInput` component now emits `value:change` trace events with file metadata (name, size, type) when files are selected. The distiller re-homes these orphaned events to the nearest preceding interaction, and the generator emits `setInputFiles` calls with paths to fixture files in `traces/fixtures/`. File upload journeys work in baseline mode as long as the fixture files are checked in.
 
 - **Interleaved form interactions.** When capturing a trace, if you interact with elements behind a modal form while the form is still open (e.g. clicking a file in the background while a New Folder dialog is open, or starting a second form before submitting the first), the trace records these events chronologically — interleaved with the form's keydown events. The test generator groups form fill and submit steps together and defers background interactions to after the submit, but it cannot handle two different forms whose interactions overlap in the trace. For best results, complete one form before starting another.
 
