@@ -135,8 +135,8 @@ case "${1:-help}" in
       [ -f "$f" ] || continue
       HAS_BASELINES=1
       name=$(basename "$f" .json)
-      events=$(node -e "console.log(JSON.parse(require('fs').readFileSync(require('path').resolve(process.argv[1]),'utf8')).length)" "$f")
-      echo "  $name ($events events)"
+      steps=$(node -e "const d=JSON.parse(require('fs').readFileSync(require('path').resolve(process.argv[1]),'utf8'));console.log(d.steps?d.steps.length:d.length)" "$f")
+      echo "  $name ($steps steps)"
     done
     [ $HAS_BASELINES -eq 0 ] && echo "  (none)"
     echo ""
@@ -147,9 +147,14 @@ case "${1:-help}" in
       echo "Usage: ./test.sh save <trace.json> <journey-name>"
       exit 1
     fi
-    cp "$2" "$BASELINES/$3.json"
-    echo "Saved baseline: $3"
-    node "$TRACE_TOOLS/summarize.js" --show-journey "$BASELINES/$3.json"
+    node -e "
+      const { distillJsonLogs } = require('$TRACE_TOOLS/distill-trace');
+      const fs = require('fs');
+      const logs = JSON.parse(fs.readFileSync('$2', 'utf8'));
+      const distilled = distillJsonLogs(logs);
+      fs.writeFileSync('$BASELINES/$3.json', JSON.stringify(distilled, null, 2));
+    "
+    echo "Saved baseline: $3 (distilled)"
     ;;
 
   fixtures)
@@ -424,8 +429,14 @@ case "${1:-help}" in
       echo "No capture found for $2. Run the test first: ./test.sh run $2"
       exit 1
     fi
-    cp "$CAPTURED" "$BASELINES/$2.json"
-    echo "Updated baseline: $2"
+    node -e "
+      const { distillJsonLogs } = require('$TRACE_TOOLS/distill-trace');
+      const fs = require('fs');
+      const logs = JSON.parse(fs.readFileSync('$CAPTURED', 'utf8'));
+      const distilled = distillJsonLogs(logs);
+      fs.writeFileSync('$BASELINES/$2.json', JSON.stringify(distilled, null, 2));
+    "
+    echo "Updated baseline: $2 (distilled)"
     ;;
 
   convert)
@@ -464,8 +475,14 @@ case "${1:-help}" in
     echo "  Step 2/3 — Saving baseline: $NAME"
     echo "═══════════════════════════════════════════════════════════════"
     mkdir -p "$BASELINES"
-    cp "$TRACE_JSON" "$BASELINES/$NAME.json"
-    echo "Saved baseline: $BASELINES/$NAME.json"
+    node -e "
+      const { distillJsonLogs } = require('$TRACE_TOOLS/distill-trace');
+      const fs = require('fs');
+      const logs = JSON.parse(fs.readFileSync('$TRACE_JSON', 'utf8'));
+      const distilled = distillJsonLogs(logs);
+      fs.writeFileSync('$BASELINES/$NAME.json', JSON.stringify(distilled, null, 2));
+    "
+    echo "Saved baseline (distilled): $BASELINES/$NAME.json"
 
     echo ""
     echo "═══════════════════════════════════════════════════════════════"

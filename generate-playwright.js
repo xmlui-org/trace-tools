@@ -1255,9 +1255,17 @@ if (require.main === module) {
 
   let distilled;
 
-  // Detect JSON vs text format
-  if (input.trim().startsWith('[') || input.trim().startsWith('{')) {
-    // JSON format - use distillJsonLogs
+  // Detect input format: distilled ({ steps: [...] }), raw JSON logs ([...]), or text
+  if (input.trim().startsWith('{')) {
+    const parsed = JSON.parse(input);
+    if (parsed.steps) {
+      // Already distilled — use directly
+      distilled = parsed;
+    } else {
+      distilled = distillJsonLogs([parsed]);
+    }
+  } else if (input.trim().startsWith('[')) {
+    // Raw JSON logs — distill
     const logs = JSON.parse(input);
     distilled = distillJsonLogs(logs);
   } else {

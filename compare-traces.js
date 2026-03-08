@@ -15,10 +15,12 @@ function distillInput(input) {
   }
 
   // JSON string - parse first
-  if (typeof input === 'string' && input.trim().startsWith('[')) {
+  if (typeof input === 'string' && (input.trim().startsWith('[') || input.trim().startsWith('{'))) {
     try {
-      const logs = JSON.parse(input);
-      return distillJsonLogs(logs);
+      const parsed = JSON.parse(input);
+      if (parsed.steps) return parsed; // Already distilled
+      if (Array.isArray(parsed)) return distillJsonLogs(parsed);
+      return distillJsonLogs([parsed]);
     } catch (e) {
       // Fall through to text parsing
     }
