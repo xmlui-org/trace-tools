@@ -713,6 +713,40 @@ Create `traces/baselines/ignore-labels.txt` with one label per line:
 
 The generator reads this file and skips matching labels when emitting `toBeVisible` and `toHaveCount(0)` assertions. Like `ignore-apis.txt`, this file is app-specific — each app declares its own ignore list based on what its UI hides from the user.
 
+### Standalone fills from `value:change` events
+
+XMLUI components wrapped with `wrapCompound` emit `value:change` trace events whenever their value changes. The generator uses these to produce Playwright `fill()` actions for TextBox and Textarea components, and assertions for other component types (Slider, Checkbox, Switch).
+
+This works for **standalone fills** — text inputs that aren't anchored to a form submit. For example, a search box with `onDidChange` but no submit button:
+
+```xml
+<TextBox placeholder="Search events..." onDidChange="(val) => { filterTerm = val }" />
+```
+
+When the trace captures a `value:change` with a non-empty value on a TextBox, the generator emits:
+
+```typescript
+await page.getByRole('textbox', { name: 'Search events...' }).fill('jazz');
+```
+
+When the value is cleared (e.g. by clicking a "close" icon that calls `searchBox.setValue('')`), the generator emits an assertion:
+
+```typescript
+await expect(page.getByRole('textbox', { name: 'Search events...' })).toHaveValue('');
+```
+
+The locator uses the component's `aria-label` or `placeholder` as the accessible name. Components wrapped with `wrapCompound` automatically include this in the trace event — no app-level changes needed.
+
+Form-anchored fills (textbox interactions followed by a submit button with `formData`) continue to work as before via `buildFillPlan()`, which matches textbox interactions to form fields by name.
+
+### App:trace shapes are advisory
+
+The semantic comparison extracts `app:trace` transition shapes — sequences of `up`, `down`, `changed`, and `same` for each traced function's fields. These are useful for understanding reactive behavior but are **advisory only** — they don't affect the pass/fail result.
+
+Reactive evaluation counts are inherently non-deterministic. A function like `filterEvents` may be called 20 times in one run and 35 times in another, depending on the order in which DataSources resolve, ChangeListeners fire, and the browser schedules renders. The number of `same` entries (redundant evaluations with unchanged inputs) varies between runs, as does the direction of numeric transitions (`up` vs `down`) when async data loading races with user actions.
+
+The comparison strips `same` entries and compares only the non-same transitions. When these differ, the report notes the difference as reactive noise rather than a behavioral regression. The meaningful assertions — same APIs, same value changes, same mutations — are what determine the match.
+
 ## How selectors are generated
 
 The XMLUI framework captures ARIA roles and accessible names in trace events. The test generator uses these to produce Playwright selectors:

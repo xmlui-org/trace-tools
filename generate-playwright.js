@@ -750,18 +750,33 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
     }
   }
 
-  // Assert value changes from wrapComponent trace events.
-  // The value:change event carries ariaName from the component's aria-label prop.
-  // The interaction event carries ariaRole from the DOM element that was clicked.
-  // Together they let us build a locator and pick the right assertion method.
+  // Handle value changes from wrapComponent trace events.
+  // The value:change event carries component type (e.g. "TextBox", "Slider") and
+  // ariaName from the component's aria-label or placeholder prop.
+  // When the value change is on a TextBox/Textarea and the step itself is NOT a
+  // textbox interaction, it's a standalone fill — generate fill() instead of assert.
   if (step.valueChanges?.length > 0) {
     for (const vc of step.valueChanges) {
       if (vc.value == null) continue;
       const escaped = vc.value.replace(/'/g, "\\'");
+      const vcComponent = vc.component; // e.g. "TextBox", "Slider"
       const ariaRole = step.target?.ariaRole;
       const ariaName = vc.ariaName || step.target?.ariaName;
 
-      // Build locator based on ariaRole + ariaName
+      // TextBox/Textarea: generate fill() for non-empty values, toHaveValue for empty
+      if ((vcComponent === 'TextBox' || vcComponent === 'Textarea') && vc.ariaName) {
+        const textLocator = `page.getByRole('textbox', { name: '${vc.ariaName.replace(/'/g, "\\'")}' })`;
+        if (escaped !== '') {
+          // Standalone fill — the user typed or programmatically set a value
+          lines.push(`${indent}await ${textLocator}.fill('${escaped}');`);
+        } else {
+          // Value cleared (e.g. by clicking a clear button) — assert it's empty
+          lines.push(`${indent}await expect(${textLocator}).toHaveValue('');`);
+        }
+        continue;
+      }
+
+      // Build locator based on ariaRole + ariaName for non-textbox components
       let locator;
       if (ariaName && ariaRole === 'slider') {
         // Radix slider: aria-label on container div, role="slider" on thumb inside
@@ -777,10 +792,6 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
       switch (ariaRole) {
         case 'slider':
           lines.push(`${indent}await expect(${locator}).toHaveAttribute('aria-valuenow', '${escaped}');`);
-          break;
-        case 'textbox':
-        case 'textarea':
-          lines.push(`${indent}await expect(${locator}).toHaveValue('${escaped}');`);
           break;
         case 'checkbox':
         case 'switch':

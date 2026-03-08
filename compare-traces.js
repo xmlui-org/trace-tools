@@ -336,6 +336,40 @@ function extractSemantics(input) {
   const uniqueValueChanges = Object.values(lastValueByComponent)
     .map(vc => `${vc.ariaName || vc.component}=${vc.value}`);
 
+  // Extract app:trace transition shapes
+  // Group by label, then for each field compute the sequence of transitions
+  const appTraces = logs.filter(e => e.kind === 'app:trace' && e.data);
+  const appTracesByLabel = {};
+  for (const e of appTraces) {
+    const label = e.label || 'unknown';
+    if (!appTracesByLabel[label]) appTracesByLabel[label] = [];
+    appTracesByLabel[label].push(e.data);
+  }
+
+  // For each label, compute transition shapes per field
+  const appTraceShapes = {};
+  for (const [label, dataSeq] of Object.entries(appTracesByLabel)) {
+    if (dataSeq.length < 2) continue; // need at least 2 to have a transition
+    const allKeys = [...new Set(dataSeq.flatMap(d => Object.keys(d)))];
+    const shape = {};
+    for (const key of allKeys) {
+      const transitions = [];
+      for (let i = 1; i < dataSeq.length; i++) {
+        const prev = dataSeq[i - 1][key];
+        const curr = dataSeq[i][key];
+        if (typeof curr === 'number' && typeof prev === 'number') {
+          // Numeric: direction
+          transitions.push(curr > prev ? 'up' : curr < prev ? 'down' : 'same');
+        } else {
+          // Everything else: changed vs same
+          transitions.push(curr === prev ? 'same' : 'changed');
+        }
+      }
+      shape[key] = transitions;
+    }
+    appTraceShapes[label] = shape;
+  }
+
   return {
     apis: uniqueApis,
     apiCount: apis.length,
@@ -346,6 +380,7 @@ function extractSemantics(input) {
     contextMenus,
     confirmationDialogs,
     valueChanges: uniqueValueChanges,
+    appTraceShapes,
     journey
   };
 }
@@ -496,6 +531,46 @@ function compareSemanticTraces(trace1, trace2, options = {}) {
     });
   }
 
+  // Compare app:trace transition shapes
+  const shapes1 = sem1.appTraceShapes || {};
+  const shapes2 = sem2.appTraceShapes || {};
+  const allLabels = [...new Set([...Object.keys(shapes1), ...Object.keys(shapes2)])].sort();
+
+  for (const label of allLabels) {
+    const s1 = shapes1[label];
+    const s2 = shapes2[label];
+
+    if (!s1) {
+      // App:trace presence can vary with timing — advisory only
+      report.differences.push({
+        type: 'app_trace_missing',
+        message: `app:trace "${label}" in after but not before`
+      });
+      continue;
+    }
+    if (!s2) {
+      report.differences.push({
+        type: 'app_trace_missing',
+        message: `app:trace "${label}" in before but not after`
+      });
+      continue;
+    }
+
+    // Compare transition sequences per field (advisory only — reactive
+    // evaluation counts and directions are non-deterministic)
+    const allFields = [...new Set([...Object.keys(s1), ...Object.keys(s2)])];
+    for (const field of allFields) {
+      const sig1 = (s1[field] || []).filter(t => t !== 'same').join(',');
+      const sig2 = (s2[field] || []).filter(t => t !== 'same').join(',');
+      if (sig1 !== sig2) {
+        report.differences.push({
+          type: 'app_trace_shape',
+          message: `app:trace "${label}" field "${field}": [${sig1}] → [${sig2}] (reactive noise, nothing to worry about)`
+        });
+      }
+    }
+  }
+
   // Add summaries
   report.before = sem1;
   report.after = sem2;
@@ -547,6 +622,17 @@ function formatSemanticReport(report, options = {}) {
     lines.push(`  Context menus: ${sem.contextMenus.join(', ')}`);
     lines.push(`  Confirmation dialogs: ${(sem.confirmationDialogs || []).length > 0 ? sem.confirmationDialogs.map(d => `"${d.title}"→${d.outcome}`).join(', ') : '(none)'}`);
     lines.push(`  Value changes: ${(sem.valueChanges || []).length > 0 ? sem.valueChanges.join(', ') : '(none)'}`);
+    const shapes = sem.appTraceShapes || {};
+    const shapeLabels = Object.keys(shapes);
+    if (shapeLabels.length > 0) {
+      lines.push(`  App traces:`);
+      for (const sl of shapeLabels) {
+        const fields = Object.entries(shapes[sl]).map(([k, v]) => `${k}:[${v.join(',')}]`).join(' ');
+        lines.push(`    ${sl}: ${fields}`);
+      }
+    } else {
+      lines.push(`  App traces: (none)`);
+    }
     if (showJourney && sem.journey) {
       lines.push('  Journey:');
       for (const step of sem.journey) {
