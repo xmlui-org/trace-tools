@@ -10,9 +10,9 @@ const appConfig = fs.existsSync(appConfigPath)
   : {};
 
 const baseURL = process.env.BASE_URL || appConfig.baseURL || 'http://localhost:5173';
-const hasAuth = !!appConfig.auth;
-const pregenAuth = appConfig.auth?.pregenerated;
 const storageStatePath = './.auth-state.json';
+const pregenAuth = fs.existsSync(storageStatePath);
+const hasAuth = !!appConfig.auth || pregenAuth;
 
 export default defineConfig({
   testDir: '.',
