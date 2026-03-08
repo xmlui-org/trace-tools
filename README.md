@@ -23,6 +23,9 @@
 - [Inspector viewer (xs-diff.html)](#inspector-viewer-xs-diffhtml)
 - [Fixtures: deterministic server state](#fixtures-deterministic-server-state)
 - [Auth configuration](#auth-configuration)
+  - [Path 1: form-based login (auth-setup.ts)](#path-1-form-based-login-auth-setupts)
+  - [Path 2: pre-generated session (mint-session)](#path-2-pre-generated-session-mint-session)
+  - [How Playwright picks up auth state](#how-playwright-picks-up-auth-state)
 - [Known limitations](#known-limitations)
 
 ## Overview
@@ -997,7 +1000,11 @@ If a test flakes and the cleanup step doesn't fire (e.g. the delete after a copy
 
 ## Auth configuration
 
-Apps that require login provide an `app-config.json` in the repo root. trace-tools reads this file and runs a headless Playwright setup project to log in and save browser state before the actual test runs.
+Many apps require a logged-in user to access the features under test. trace-tools supports two auth paths — choose whichever fits your app's login mechanism.
+
+### Path 1: form-based login (auth-setup.ts)
+
+For apps with a username/password form, put auth credentials in `app-config.json`:
 
 ```json
 {
@@ -1013,9 +1020,45 @@ Apps that require login provide an `app-config.json` in the repo root. trace-too
 }
 ```
 
-Each field specifies a Playwright locator strategy (`getByLabel`, `getByPlaceholder`) and an input method (`fill` or `pressSequentially` for inputs that are initially readonly).
+Each field specifies a Playwright locator strategy (`getByLabel`, `getByPlaceholder`) and an input method (`fill` or `pressSequentially` for inputs that are initially readonly). trace-tools runs `auth-setup.ts` as a Playwright setup project — it fills the form, clicks submit, waits for the response, and saves browser state to `.auth-state.json`.
 
-Apps that don't require login (e.g. myWorkDrive-Client) omit this file entirely. The base URL defaults to `http://localhost:5173`, or can be overridden via the `BASE_URL` environment variable.
+### Path 2: pre-generated session (mint-session)
+
+For apps that use OAuth, magic links, or other flows that can't be driven by form-fill, you write a script that mints a session server-side and writes `.auth-state.json` directly in Playwright's `storageState` format. The script runs before Playwright — no setup project needed.
+
+The `.auth-state.json` file follows Playwright's storage state schema:
+
+```json
+{
+  "cookies": [],
+  "origins": [{
+    "origin": "http://localhost:8080",
+    "localStorage": [{
+      "name": "sb-<project-ref>-auth-token",
+      "value": "{\"access_token\":\"...\",\"refresh_token\":\"...\",\"user\":{...}}"
+    }]
+  }]
+}
+```
+
+Your mint script typically needs:
+- A **service-role key** (or equivalent admin credential) to create/authenticate the test user server-side
+- A **test user identity** (email, username, etc.)
+- The **base URL** of the app under test (to set the correct `origin` in storage state)
+
+These should be passed as environment variables, stored as CI secrets, never checked in.
+
+For a working example of this pattern with Supabase, see [community-calendar's regression testing docs](https://github.com/jonudell/community-calendar/blob/main/docs/regression-testing.md).
+
+### How Playwright picks up auth state
+
+`playwright.config.ts` detects which path to use automatically:
+
+1. If `.auth-state.json` already exists (pre-generated), it skips the setup project and loads the file directly as `storageState`.
+2. If `app-config.json` has an `auth` section but no `.auth-state.json` exists, it runs `auth-setup.ts` first, which creates `.auth-state.json`.
+3. If neither exists, tests run without auth.
+
+Apps that don't require login omit `app-config.json` entirely (or include only `baseURL`). The base URL defaults to `http://localhost:5173`, or can be overridden via the `BASE_URL` environment variable.
 
 ## Known limitations
 
