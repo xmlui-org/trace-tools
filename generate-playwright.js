@@ -1189,7 +1189,11 @@ function generateApiResultAssertions(captures, indent) {
         }
       }
     } else if (apiResult.type === 'rowcount') {
-      lines.push(`${indent}expect(${bodyVar}.length).toBe(${apiResult.count});`);
+      if (apiResult.count != null) {
+        lines.push(`${indent}expect(${bodyVar}.length).toBe(${apiResult.count});`);
+      } else {
+        lines.push(`${indent}expect(${bodyVar}.length).toBeGreaterThan(0);`);
+      }
       const keysStr = apiResult.keys.map(k => `'${k}'`).join(', ');
       lines.push(`${indent}expect(Object.keys(${bodyVar}[0]).sort()).toEqual([${keysStr}]);`);
     }
