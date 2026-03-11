@@ -875,6 +875,18 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
   const callSuffix = opts ? `(${opts})` : '()';
   const methodCall = `.${method}${callSuffix}`;
 
+  // Canvas click with coordinates: positional click for canvas-rendered components
+  // (ECharts, etc.) that can't be targeted by DOM selectors.
+  if (targetTag === 'canvas' && step.target?.canvasX != null) {
+    // Scope to the right canvas when multiple exist (e.g. dashboard with two charts).
+    // The aria-label is on the wrapper div — find the canvas inside it.
+    const canvasLocator = ariaName
+      ? `page.locator('[aria-label="${ariaName}"]').locator('canvas')`
+      : `page.locator('canvas').first()`;
+    lines.push(`${indent}await ${canvasLocator}.click({ position: { x: ${step.target.canvasX}, y: ${step.target.canvasY} } });`);
+    return lines;
+  }
+
   // Textbox click with ariaName: generate fill() if we matched a formData field
   if (ariaRole === 'textbox' && ariaName && fillPlan.fills?.has(ariaName)) {
     const { value } = fillPlan.fills.get(ariaName);

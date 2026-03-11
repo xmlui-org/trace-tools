@@ -633,6 +633,27 @@ function extractStepFromJsonLogs(trace) {
     target.targetTag = interaction.detail.targetTag;
   }
 
+  // Canvas clicks: extract coordinates from native:click events for positional replay.
+  // Canvas-rendered components (ECharts, etc.) can't be targeted by DOM selectors —
+  // Playwright replays them via page.locator('canvas').click({ position: { x, y } }).
+  if (target.targetTag === 'canvas' || target.targetTag === 'CANVAS') {
+    const nativeClick = events.find(e =>
+      e.kind?.startsWith('native:') && typeof e.offsetX === 'number'
+    );
+    if (nativeClick) {
+      target.canvasX = Math.round(nativeClick.offsetX);
+      target.canvasY = Math.round(nativeClick.offsetY);
+      // Preserve aria-label for scoping when multiple canvases exist on the page
+      if (nativeClick.ariaName) {
+        target.ariaName = nativeClick.ariaName;
+      }
+      // Preserve the display label for the step summary
+      if (nativeClick.displayLabel) {
+        target.label = nativeClick.displayLabel;
+      }
+    }
+  }
+
   // Capture selectorPath if available (Playwright-ready selector)
   if (interaction.detail?.selectorPath) {
     target.selectorPath = interaction.detail.selectorPath;
