@@ -22,11 +22,13 @@ RUNS="$APP_DIR/traces/runs"
 FIXTURES="$APP_DIR/traces/fixtures"
 VIDEOS="$APP_DIR/traces/videos"
 
-# Parse --video flag from any position
+# Parse --video and --headless flags from any position
 ARGS=()
 for arg in "$@"; do
   if [ "$arg" = "--video" ]; then
     export PLAYWRIGHT_VIDEO=on
+  elif [ "$arg" = "--headless" ]; then
+    export PLAYWRIGHT_HEADLESS=on
   else
     ARGS+=("$arg")
   fi
@@ -204,10 +206,10 @@ case "${1:-help}" in
     echo "═══════════════════════════════════════════════════════════════"
     echo ""
     cd "$TRACE_TOOLS"
-    SPEC_COPY="$TRACE_TOOLS/_spec-$2.spec.ts"
+    SPEC_COPY="$TRACE_TOOLS/capture-scripts/_spec-$2.spec.ts"
     cp "$SPEC" "$SPEC_COPY"
     TEST_OUTPUT=$(mktemp)
-    npx playwright test "_spec-$2.spec.ts" > "$TEST_OUTPUT" 2>&1
+    npx playwright test "capture-scripts/_spec-$2.spec.ts" > "$TEST_OUTPUT" 2>&1
     TEST_EXIT=$?
     rm -f "$SPEC_COPY"
 
@@ -216,7 +218,7 @@ case "${1:-help}" in
     else
       echo "FAIL — Test failed (see below)"
       echo ""
-      grep -A 10 "Error:" "$TEST_OUTPUT" | head -15
+      cat "$TEST_OUTPUT"
     fi
 
     if grep -q "XMLUI RUNTIME ERRORS\|BROWSER ERRORS" "$TEST_OUTPUT"; then

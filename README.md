@@ -619,6 +619,18 @@ Videos are saved to `traces/videos/<journey>.webm`. Since the tests replay real 
 
 This uses Playwright's built-in video recording. The `--video` flag sets `PLAYWRIGHT_VIDEO=on` in the environment, which `playwright.config.ts` reads.
 
+## Headless mode
+
+By default, tests run in a visible browser window (headed mode). Add `--headless` to run without a browser window — useful for CI or when running tests in the background:
+
+```bash
+./test.sh spec upload-file --headless
+./test.sh spec-all --headless
+./test.sh run copy-paste-and-move --headless
+```
+
+The `--headless` flag sets `PLAYWRIGHT_HEADLESS=on` in the environment, which `playwright.config.ts` reads. The flags `--video` and `--headless` can be combined.
+
 ## Reading the test output
 
 A test run produces several kinds of results:
