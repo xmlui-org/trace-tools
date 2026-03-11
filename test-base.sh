@@ -208,28 +208,19 @@ case "${1:-help}" in
     cd "$TRACE_TOOLS"
     SPEC_COPY="$TRACE_TOOLS/capture-scripts/_spec-$2.spec.ts"
     cp "$SPEC" "$SPEC_COPY"
-    TEST_OUTPUT=$(mktemp)
-    npx playwright test "capture-scripts/_spec-$2.spec.ts" > "$TEST_OUTPUT" 2>&1
+    npx playwright test "capture-scripts/_spec-$2.spec.ts" --reporter=list
     TEST_EXIT=$?
     rm -f "$SPEC_COPY"
 
     if [ $TEST_EXIT -eq 0 ]; then
       echo "PASS — Spec completed successfully"
     else
-      echo "FAIL — Test failed (see below)"
-      echo ""
-      cat "$TEST_OUTPUT"
-    fi
-
-    if grep -q "XMLUI RUNTIME ERRORS\|BROWSER ERRORS" "$TEST_OUTPUT"; then
-      echo ""
-      grep -A 50 "XMLUI RUNTIME ERRORS\|BROWSER ERRORS" "$TEST_OUTPUT"
+      echo "FAIL — Test failed (see above)"
     fi
 
     echo ""
     echo "═══════════════════════════════════════════════════════════════"
     collect_video "$2"
-    rm -f "$TEST_OUTPUT"
     exit $TEST_EXIT
     ;;
 
@@ -290,6 +281,7 @@ case "${1:-help}" in
     npx playwright test "generated-$2.spec.ts" > "$TEST_OUTPUT" 2>&1
     TEST_EXIT=$?
     rm -f "$TEST_FILE"
+
 
     echo ""
     echo "═══════════════════════════════════════════════════════════════"
