@@ -86,8 +86,8 @@ setup_specs() {
     local win_link win_src
     win_link="$(cygpath -w "$LINK")"
     win_src="$(cygpath -w "$SOURCE")"
-    cmd.exe /c "mklink /J \"$win_link\" \"$win_src\"" >/dev/null 2>&1 && return 0
-    cmd.exe /c "mklink /D \"$win_link\" \"$win_src\"" >/dev/null 2>&1 && return 0
+    cmd.exe /c "mklink /J \"$win_link\" \"$win_src\"" </dev/null >/dev/null 2>&1 && return 0
+    cmd.exe /c "mklink /D \"$win_link\" \"$win_src\"" </dev/null >/dev/null 2>&1 && return 0
   fi
 
   ln -s "$SOURCE" "$LINK" 2>/dev/null && return 0
