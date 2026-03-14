@@ -75,6 +75,9 @@ function generatePlaywright(distilled, options = {}) {
       if (p) seenGetEndpoints.add(p);
     }
   }
+  // Track rowcount history across steps for transition-based assertions
+  const endpointHistory = new Map();
+
   for (let si = 0; si < orderedSteps.length; si++) {
     const step = orderedSteps[si];
 
@@ -103,7 +106,7 @@ function generatePlaywright(distilled, options = {}) {
     }
 
     const stepLines = [];
-    stepLines.push(...generateStepCode(step, fillPlan, responsePromiseCounter, si, ignoreLabels));
+    stepLines.push(...generateStepCode(step, fillPlan, responsePromiseCounter, si, ignoreLabels, endpointHistory));
     // Increment counter by the number of deduplicated API promises used
     if (step.action !== 'startup' && step.await?.api?.length > 0) {
       const seenPaths = new Set();
@@ -572,7 +575,7 @@ function clickOptions(target, extra = {}) {
   return `{ ${parts.join(', ')} }`;
 }
 
-function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ignoreLabels = new Set()) {
+function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ignoreLabels = new Set(), endpointHistory = new Map()) {
   const lines = [];
   const indent = '  ';
 
@@ -660,7 +663,7 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
           lines.push(`${indent}]);`);
         }
         // Emit API result assertions for startup
-        lines.push(...generateApiResultAssertions(startupCaptures, indent));
+        lines.push(...generateApiResultAssertions(startupCaptures, indent, endpointHistory));
       } else {
         lines.push(`${indent}await page.goto('./');`);
       }
@@ -759,7 +762,7 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
   // Emit API result assertions for non-startup steps
   const awaitsWithResults = apiAwaits.filter(a => a.apiResult);
   if (awaitsWithResults.length > 0) {
-    lines.push(...generateApiResultAssertions(awaitsWithResults, indent));
+    lines.push(...generateApiResultAssertions(awaitsWithResults, indent, endpointHistory));
   }
 
   // Add navigation await conditions (skip for startup - already handled inline,
@@ -1173,14 +1176,22 @@ function generateSingleModalCode(modal, indent) {
 
 /**
  * Generate expect() assertions for API response bodies.
- * Each capture has { varName, apiResult } where apiResult is either:
+ * Each capture has { varName, apiResult, path } where apiResult is either:
  *   { type: 'snapshot', keys: [...], values: {...} }  — assert key-value pairs (skip __DATE__)
  *   { type: 'rowcount', count: N, keys: [...] }       — assert array length + key schema
+ *
+ * For rowcount assertions, uses transition-based checks:
+ *   - First occurrence of an endpoint: assert non-empty + key schema
+ *   - Subsequent occurrences: assert direction of change (up/down/same)
+ *
+ * @param {Array} captures - API captures with varName, apiResult, path
+ * @param {string} indent - indentation string
+ * @param {Map} endpointHistory - maps endpoint path → { count, bodyVar } from prior steps
  */
-function generateApiResultAssertions(captures, indent) {
+function generateApiResultAssertions(captures, indent, endpointHistory) {
   const lines = [];
   for (let i = 0; i < captures.length; i++) {
-    const { varName, apiResult, resolvedVar } = captures[i];
+    const { varName, apiResult, resolvedVar, path } = captures[i];
     if (!apiResult) continue;
 
     const bodyVar = `body_${varName}`;
@@ -1200,13 +1211,26 @@ function generateApiResultAssertions(captures, indent) {
         }
       }
     } else if (apiResult.type === 'rowcount') {
-      if (apiResult.count != null) {
-        lines.push(`${indent}expect(${bodyVar}.length).toBe(${apiResult.count});`);
+      const prev = endpointHistory && path ? endpointHistory.get(path) : null;
+      if (prev && apiResult.count != null) {
+        // Repeated endpoint: assert transition direction
+        if (apiResult.count > prev.count) {
+          lines.push(`${indent}expect(${bodyVar}.length).toBeGreaterThan(${prev.bodyVar}.length);`);
+        } else if (apiResult.count < prev.count) {
+          lines.push(`${indent}expect(${bodyVar}.length).toBeLessThan(${prev.bodyVar}.length);`);
+        } else {
+          lines.push(`${indent}expect(${bodyVar}.length).toBe(${prev.bodyVar}.length);`);
+        }
       } else {
+        // First occurrence: assert non-empty
         lines.push(`${indent}expect(${bodyVar}.length).toBeGreaterThan(0);`);
       }
       const keysStr = apiResult.keys.map(k => `'${k}'`).join(', ');
       lines.push(`${indent}expect(Object.keys(${bodyVar}[0]).sort()).toEqual([${keysStr}]);`);
+      // Record for future steps
+      if (endpointHistory && path && apiResult.count != null) {
+        endpointHistory.set(path, { count: apiResult.count, bodyVar });
+      }
     }
   }
   return lines;
