@@ -5,6 +5,11 @@
 const { parseTrace } = require('./parse-trace');
 const { distillTrace } = require('./distill-trace');
 
+/** Escape a string for embedding inside a JS single-quoted literal. */
+function esc(s) {
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+}
+
 function generatePlaywright(distilled, options = {}) {
   const { testName = 'user-journey', baseUrl = '/', captureTrace = true, useHashRouting = true, browserErrors = false, ignoreLabels = new Set() } = options;
 
@@ -539,7 +544,7 @@ function stepLabel(step) {
  * either over-matches (substring) or fails (exact). Instead, filter by the cell content.
  */
 function rowLocator(ariaName) {
-  const escaped = ariaName.replace(/'/g, "\\'");
+  const escaped = esc(ariaName);
   return `page.getByRole('row').filter({ has: page.getByRole('cell', { name: '${escaped}', exact: true }) })`;
 }
 
@@ -709,7 +714,7 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
         const entry = fillPlan.fills.get(kdAriaName);
         fillPlan.fills.consume(kdAriaName);
         fillPlan._filledInCurrentForm.add(kdAriaName);
-        lines.push(`${indent}await page.getByRole('textbox', { name: '${kdAriaName}' }).fill('${entry.value.replace(/'/g, "\\'")}');`);
+        lines.push(`${indent}await page.getByRole('textbox', { name: '${esc(kdAriaName)}' }).fill('${esc(entry.value)}');`);
         return lines;
       }
       // Skip keydowns not covered by fill plan — unless they have valueChanges
@@ -728,8 +733,7 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
 
     case 'toast':
       for (const toast of step.toasts || []) {
-        const escaped = toast.message.replace(/'/g, "\\'");
-        lines.push(`${indent}await expect(page.locator('[role="status"]').filter({ hasText: '${escaped}' }).first()).toBeVisible({ timeout: 5000 });`);
+        lines.push(`${indent}await expect(page.locator('[role="status"]').filter({ hasText: '${esc(toast.message)}' }).first()).toBeVisible({ timeout: 5000 });`);
       }
       break;
 
@@ -775,8 +779,7 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
   const hadCancel = step.modals?.some(m => m.action === 'cancel');
   if (step.toasts?.length > 0 && !hadCancel) {
     for (const t of step.toasts) {
-      const escaped = t.message.replace(/'/g, "\\'");
-      lines.push(`${indent}await expect(page.locator('[role="status"]').filter({ hasText: '${escaped}' }).first()).toBeVisible({ timeout: 5000 });`);
+      lines.push(`${indent}await expect(page.locator('[role="status"]').filter({ hasText: '${esc(t.message)}' }).first()).toBeVisible({ timeout: 5000 });`);
     }
   }
 
@@ -785,13 +788,11 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
     for (const change of step.dataSourceChanges) {
       for (const name of (change.added || [])) {
         if (ignoreLabels.has(name)) continue;
-        const escaped = name.replace(/'/g, "\\'");
-        lines.push(`${indent}await expect(page.getByRole('cell', { name: '${escaped}', exact: true })).toBeVisible({ timeout: 10000 });`);
+        lines.push(`${indent}await expect(page.getByRole('cell', { name: '${esc(name)}', exact: true })).toBeVisible({ timeout: 10000 });`);
       }
       for (const name of (change.removed || [])) {
         if (ignoreLabels.has(name)) continue;
-        const escaped = name.replace(/'/g, "\\'");
-        lines.push(`${indent}await expect(page.getByRole('cell', { name: '${escaped}', exact: true })).toHaveCount(0);`);
+        lines.push(`${indent}await expect(page.getByRole('cell', { name: '${esc(name)}', exact: true })).toHaveCount(0);`);
       }
     }
   }
@@ -815,14 +816,14 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
       }
 
       if (vc.value == null) continue;
-      const escaped = vc.value.replace(/'/g, "\\'");
+      const escaped = esc(vc.value);
       const vcComponent = vc.component; // e.g. "TextBox", "Slider"
       const ariaRole = step.target?.ariaRole;
       const ariaName = vc.ariaName || step.target?.ariaName;
 
       // TextBox/Textarea: generate fill() for non-empty values, toHaveValue for empty
       if ((vcComponent === 'TextBox' || vcComponent === 'Textarea') && vc.ariaName) {
-        const textLocator = `page.getByRole('textbox', { name: '${vc.ariaName.replace(/'/g, "\\'")}' })`;
+        const textLocator = `page.getByRole('textbox', { name: '${esc(vc.ariaName)}' })`;
         if (escaped !== '') {
           // Standalone fill — the user typed or programmatically set a value
           lines.push(`${indent}await ${textLocator}.fill('${escaped}');`);
@@ -893,7 +894,7 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
     fillPlan.fills.consume(ariaName);
     if (!fillPlan._filledInCurrentForm) fillPlan._filledInCurrentForm = new Set();
     fillPlan._filledInCurrentForm.add(ariaName);
-    lines.push(`${indent}await page.getByRole('textbox', { name: '${ariaName}' }).fill('${value.replace(/'/g, "\\'")}');`);
+    lines.push(`${indent}await page.getByRole('textbox', { name: '${esc(ariaName)}' }).fill('${esc(value)}');`);
     return lines;
   }
 
@@ -915,12 +916,12 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
         if (stringFields.length === 1) {
           // Single field: target the textbox directly
           const [, value] = stringFields[0];
-          lines.push(`${indent}await ${formLocator}.getByRole('textbox').fill('${value.replace(/'/g, "\\'")}');`);
+          lines.push(`${indent}await ${formLocator}.getByRole('textbox').fill('${esc(value)}');`);
         } else {
           // Multiple fields: fill by runtime textbox count.
           // Some fields may be disabled/hidden (e.g. conditional form items),
           // so nth() indices from formData may not match visible textboxes.
-          const values = stringFields.map(([, v]) => v.replace(/'/g, "\\'"));
+          const values = stringFields.map(([, v]) => esc(v));
           lines.push(`${indent}{`);
           lines.push(`${indent}  const _values = [${values.map(v => `'${v}'`).join(', ')}];`);
           lines.push(`${indent}  const _count = await ${formLocator}.getByRole('textbox').count();`);
@@ -1009,8 +1010,7 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
     } else {
       // If this menuitem click needs a submenu hover first, emit it
       if (ariaRole === 'menuitem' && step.submenuParent) {
-        const parentEscaped = step.submenuParent.replace(/'/g, "\\'");
-        lines.push(`${indent}await page.getByRole('menuitem', { name: '${parentEscaped}', exact: true }).hover();`);
+        lines.push(`${indent}await page.getByRole('menuitem', { name: '${esc(step.submenuParent)}', exact: true }).hover();`);
       }
       // Radix slider: aria-label on container div, role="slider" on thumb inside.
       // getByRole('slider', { name }) won't match because they're on different elements.
@@ -1194,8 +1194,7 @@ function generateApiResultAssertions(captures, indent) {
         if (value === null) {
           lines.push(`${indent}expect(${bodyVar}[0].${key}).toBeNull();`);
         } else if (typeof value === 'string') {
-          const escaped = value.replace(/'/g, "\\'");
-          lines.push(`${indent}expect(${bodyVar}[0].${key}).toBe('${escaped}');`);
+          lines.push(`${indent}expect(${bodyVar}[0].${key}).toBe('${esc(value)}');`);
         } else {
           lines.push(`${indent}expect(${bodyVar}[0].${key}).toBe(${value});`);
         }
