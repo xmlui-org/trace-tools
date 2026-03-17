@@ -32,6 +32,7 @@ function generatePlaywright(distilled, options = {}) {
   // Pre-pass: match textbox interactions to formData fields so we can
   // generate fills using actual ariaNames instead of field-name guesses.
   const fillPlan = buildFillPlan(orderedSteps);
+  fillPlan._allSteps = orderedSteps;
 
   // Detect starting page: if the first interaction has navigate.from on a
   // non-root path, the trace was captured on a subpage and the test needs
@@ -672,7 +673,7 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
     case 'click': {
       // Skip clicks on unnamed form inputs — just focus noise
       if (step.target?.ariaRole && !step.target?.ariaName &&
-          ['textbox', 'textarea'].includes(step.target.ariaRole) &&
+          ['textbox', 'textarea', 'spinbutton'].includes(step.target.ariaRole) &&
           !step.target?.formData) {
         lines.pop();
         return [];
@@ -909,32 +910,75 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
     if (fillPlan._filledInCurrentForm) fillPlan._filledInCurrentForm.clear();
 
     if (!hadInteractions && !fillPlan.formsWithTextboxInteractions?.has(step.target?.testId)) {
-      // No textbox interactions at all for this form — the spec used .fill()
-      // or the form was pre-filled and the user changed the value.
-      // Emit fill() calls using the form's testId to locate textboxes.
+      // No textbox interactions at all for this form — compare against other
+      // submits to detect which string fields actually changed. Only fill those.
       const testId = step.target?.testId;
-      const stringFields = Object.entries(formData).filter(([, v]) => typeof v === 'string');
-      if (testId && stringFields.length > 0) {
+      const allStringFields = Object.entries(formData).filter(([, v]) => typeof v === 'string');
+      // Diff against reference formData (previous submit, or look-ahead for first submit)
+      let refFormData = fillPlan._prevStringFormData;
+      if (!refFormData) {
+        const thisTestId = step.target?.testId;
+        for (const s of (fillPlan._allSteps || [])) {
+          if (s !== step && s.target?.formData && s.target?.testId === thisTestId) {
+            refFormData = s.target.formData;
+            break;
+          }
+        }
+      }
+      const changedStringFields = refFormData
+        ? allStringFields.filter(([k, v]) => refFormData[k] !== v)
+        : allStringFields;
+      fillPlan._prevStringFormData = { ...formData };
+
+      if (testId && changedStringFields.length > 0) {
         const formLocator = `page.locator('[data-testid="${testId}"]')`;
-        if (stringFields.length === 1) {
-          // Single field: target the textbox directly
-          const [, value] = stringFields[0];
+        if (changedStringFields.length === 1) {
+          const [, value] = changedStringFields[0];
           lines.push(`${indent}await ${formLocator}.getByRole('textbox').fill('${esc(value)}');`);
         } else {
-          // Multiple fields: fill by runtime textbox count.
-          // Some fields may be disabled/hidden (e.g. conditional form items),
-          // so nth() indices from formData may not match visible textboxes.
-          const values = stringFields.map(([, v]) => esc(v));
-          lines.push(`${indent}{`);
-          lines.push(`${indent}  const _values = [${values.map(v => `'${v}'`).join(', ')}];`);
-          lines.push(`${indent}  const _count = await ${formLocator}.getByRole('textbox').count();`);
-          lines.push(`${indent}  for (let _i = 0; _i < Math.min(_count, _values.length); _i++) {`);
-          lines.push(`${indent}    await ${formLocator}.getByRole('textbox').nth(_i).fill(_values[_i]);`);
-          lines.push(`${indent}  }`);
-          lines.push(`${indent}}`);
+          // Fill changed fields by their index within all string fields
+          for (const [key, value] of changedStringFields) {
+            const idx = allStringFields.findIndex(([k]) => k === key);
+            lines.push(`${indent}await ${formLocator}.getByRole('textbox').nth(${idx}).fill('${esc(value)}');`);
+          }
         }
       }
     }
+
+    // Number fields in formData → spinbutton fills.
+    // Compare against other submits' formData to detect which values changed;
+    // only fill changed spinbuttons to avoid unnecessary interactions.
+    // For the first submit, look ahead at subsequent submits to find "stable"
+    // values that didn't change — those are defaults that don't need filling.
+    const numberFields = Object.entries(formData).filter(([, v]) => typeof v === 'number');
+    if (numberFields.length > 0) {
+      let refFormData = fillPlan._prevFormData;
+      if (!refFormData) {
+        // First submit: look ahead for a later submit on the same form to use as reference
+        const thisTestId = step.target?.testId;
+        for (const s of (fillPlan._allSteps || [])) {
+          if (s !== step && s.target?.formData && s.target?.testId === thisTestId) {
+            refFormData = s.target.formData;
+            break;
+          }
+        }
+      }
+      const changedNumbers = refFormData
+        ? numberFields.filter(([k, v]) => refFormData[k] !== v)
+        : numberFields;
+      if (changedNumbers.length > 0) {
+        for (const [key, value] of changedNumbers) {
+          // Convert camelCase formData key to a regex pattern matching the ARIA label.
+          // e.g. "SSHPort" → /SSH\s*Port/i, "IdleSessionTimeout" → /Idle\s*Session\s*Timeout/i
+          const labelPattern = key
+            .replace(/([a-z])([A-Z])/g, '$1\\s*$2')
+            .replace(/([A-Z]+)([A-Z][a-z])/g, '$1\\s*$2');
+          lines.push(`${indent}await page.getByRole('spinbutton', { name: /${labelPattern}/i }).fill('${value}');`);
+        }
+      }
+    }
+    // Track this formData for diffing against the next submit
+    fillPlan._prevFormData = { ...formData };
   }
 
   // Checkbox in a table row: hover the row first to make the checkbox visible
@@ -1199,17 +1243,13 @@ function generateApiResultAssertions(captures, indent, endpointHistory) {
     lines.push(`${indent}const ${bodyVar} = await ${responseRef}.json();`);
 
     if (apiResult.type === 'snapshot') {
-      // Assert each non-date value
-      for (const [key, value] of Object.entries(apiResult.values)) {
-        if (value === '__DATE__') continue;
-        if (value === null) {
-          lines.push(`${indent}expect(${bodyVar}[0].${key}).toBeNull();`);
-        } else if (typeof value === 'string') {
-          lines.push(`${indent}expect(${bodyVar}[0].${key}).toBe('${esc(value)}');`);
-        } else {
-          lines.push(`${indent}expect(${bodyVar}[0].${key}).toBe(${value});`);
-        }
-      }
+      // Assert shape (keys exist) rather than exact values, which are
+      // environment-specific. Use Array.isArray to handle both object
+      // and array responses.
+      const keysStr = apiResult.keys.map(k => `'${k}'`).join(', ');
+      lines.push(`${indent}{ const _snap = Array.isArray(${bodyVar}) ? ${bodyVar}[0] : ${bodyVar};`);
+      lines.push(`${indent}  expect(Object.keys(_snap).sort()).toEqual([${keysStr}]); }`);
+
     } else if (apiResult.type === 'rowcount') {
       const prev = endpointHistory && path ? endpointHistory.get(path) : null;
       if (prev && apiResult.count != null) {
