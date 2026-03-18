@@ -78,7 +78,7 @@
         position: sticky;
         top: 0;
         z-index: 1;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
       }
 
       .spacer { flex: 1 1 auto; }
@@ -720,18 +720,14 @@
   </head>
   <body>
     <div class="toolbar">
-      <label>View:</label>
-      <label><input type="radio" name="viewMode" id="viewPretty" checked /> pretty</label>
-      <label><input type="radio" name="viewMode" id="viewRaw" /> raw</label>
-      <span class="spacer"></span>
+      <span style="display: flex; align-items: center; gap: var(--space-2);"><label>View:</label><label><input type="radio" name="viewMode" id="viewPretty" checked /> pretty</label><label><input type="radio" name="viewMode" id="viewRaw" /> raw</label></span>
       <input type="text" id="searchInput" placeholder="Search..." style="width: 200px;" />
       <button id="searchPrev" title="Previous match">▲</button>
       <button id="searchNext" title="Next match">▼</button>
-      <span id="searchCount" style="font-size: var(--font-sm); color: var(--color-text-muted); min-width: 60px;"></span>
-      <span class="spacer"></span>
+      <span id="searchCount" style="font-size: var(--font-sm); color: var(--color-text-muted);"></span>
+      <input type="text" id="filterInput" placeholder="Hide..." style="flex: 1; min-width: 100px;" />
       <button id="clear">Clear</button>
       <button id="test">Test</button>
-      <span class="spacer"></span>
       <select id="exportFormat">
         <option value="">Export...</option>
         <option value="html">Download HTML</option>
@@ -5110,11 +5106,33 @@
         navigateToMatch(searchState.currentIndex + 1);
       });
 
+      // Filter: hide trace groups whose header text matches the filter term
+      let filterTimeout = null;
+      document.getElementById("filterInput").addEventListener("input", (e) => {
+        clearTimeout(filterTimeout);
+        filterTimeout = setTimeout(() => applyFilter(e.target.value), 200);
+      });
+
+      function applyFilter(term) {
+        const groups = document.querySelectorAll(".trace-group");
+        const terms = term.toLowerCase().trim().split(/\s+/).filter(Boolean);
+        groups.forEach((group) => {
+          if (!terms.length) {
+            group.style.display = "";
+            return;
+          }
+          const componentEl = group.querySelector(".trace-header .component");
+          const text = componentEl ? componentEl.textContent.toLowerCase() : "";
+          group.style.display = terms.some((t) => text.includes(t)) ? "none" : "";
+        });
+      }
+
       // Clear search when view changes or data refreshes
       const originalRender = render;
       render = function() {
         clearSearchHighlights();
         document.getElementById("searchInput").value = "";
+        document.getElementById("filterInput").value = "";
         originalRender.apply(this, arguments);
       };
 
