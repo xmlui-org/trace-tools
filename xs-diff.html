@@ -2271,6 +2271,7 @@
           if (behavioral) {
             const parts = [behavioral.kind];
             if (behavioral.component) parts.push(behavioral.component);
+            if (behavioral.ariaName) parts.push(`[${behavioral.ariaName}]`);
             if (behavioral.displayLabel) parts.push(`"${behavioral.displayLabel}"`);
             else if (behavioral.componentLabel) parts.push(`"${behavioral.componentLabel}"`);
             componentText = parts.join(" ");
@@ -2635,12 +2636,13 @@
           // Build a descriptive label: combine componentLabel/componentType with displayLabel
           let label = "";
           const compName = e.componentLabel || e.component || "";
+          const ariaTag = e.ariaName ? ` [${e.ariaName}]` : "";
           if (compName && e.displayLabel) {
-            label = `${compName} "${e.displayLabel}"`;
+            label = `${compName}${ariaTag} "${e.displayLabel}"`;
           } else if (e.displayLabel) {
             label = `"${e.displayLabel}"`;
           } else if (compName) {
-            label = compName;
+            label = compName + ariaTag;
           }
           // Append canvas coordinates for native events (used for positional replay)
           if (typeof e.offsetX === "number") {
@@ -2660,11 +2662,12 @@
           const compType = firstEntry.component || "";
           const compId = firstEntry.componentLabel || "";
           const compName = compType && compId && compType !== compId ? `${compType} "${compId}"` : compId || compType;
+          const ariaTag = firstEntry.ariaName ? ` [${firstEntry.ariaName}]` : "";
           let label;
           if (count === 1 || firstValue === lastValue) {
-            label = compName && firstValue ? `${compName} "${firstValue}"` : firstValue ? `"${firstValue}"` : compName;
+            label = compName && firstValue ? `${compName}${ariaTag} "${firstValue}"` : firstValue ? `"${firstValue}"` : compName + ariaTag;
           } else {
-            label = compName ? `${compName} "${firstValue}" → "${lastValue}"` : `"${firstValue}" → "${lastValue}"`;
+            label = compName ? `${compName}${ariaTag} "${firstValue}" → "${lastValue}"` : `"${firstValue}" → "${lastValue}"`;
           }
           // Append canvas coordinates from the last entry in the range
           const coordEntry = count === 1 ? firstEntry : lastEntry;
@@ -3927,6 +3930,10 @@
                 bodyHtml += `<div class="text-warning">Could not render diff: ${diffErr.message}</div>`;
               }
             }
+          } else if (e.diffPretty && e.kind !== "component:vars:init" && e.kind !== "component:vars:change") {
+            // Fallback: show diffPretty text when diffJson is absent
+            const cleanDiff = e.diffPretty.replace(/^file:.*\n/m, "");
+            bodyHtml += wrapDiffInExpander(`<pre class="source-code">${cleanDiff.replace(/</g, "&lt;")}</pre>`, "Diff", false);
           }
 
           bodyHtml += `</div>`;

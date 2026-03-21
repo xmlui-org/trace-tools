@@ -45,9 +45,19 @@ try {
       if (step.action === 'keydown') continue; // Skip keydown noise
 
       const target = step.target?.label || step.target?.testId || step.target?.component || '';
+      const ariaName = step.target?.ariaName;
       const formData = step.target?.formData;
 
       let line = `  ${step.action}: ${target}`;
+      if (ariaName && ariaName !== target) {
+        line += ` [${ariaName}]`;
+      }
+      if (step.valueChanges?.length > 0) {
+        for (const vc of step.valueChanges) {
+          const vcLabel = vc.ariaName ? ` [${vc.ariaName}]` : '';
+          line += ` → ${vc.component}${vcLabel}=${vc.value ?? ''}`;
+        }
+      }
       if (formData?.name) {
         line += ` → "${formData.name}"`;
       }

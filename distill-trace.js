@@ -420,6 +420,21 @@ function distillJsonLogs(logs) {
   const traceArray = Array.from(traces.values())
     .sort((a, b) => a.firstPerfTs - b.firstPerfTs);
 
+  // Collect ariaName from non-interaction trace groups (value:change, focus:change,
+  // native:* events from wrapComponent that land in their own traceId). These will
+  // be propagated to the nearest preceding interaction step below.
+  const ariaNameByTs = []; // { ts, ariaName }
+  for (const trace of traceArray) {
+    const hasInteraction = trace.events.some(e => e.kind === 'interaction');
+    if (hasInteraction) continue;
+    for (const e of trace.events) {
+      if (e.ariaName && (e.kind === 'value:change' || e.kind === 'focus:change' || e.kind?.startsWith('native:'))) {
+        ariaNameByTs.push({ ts: e.perfTs || e.ts || 0, ariaName: e.ariaName });
+        break; // one per trace group is enough
+      }
+    }
+  }
+
   // Convert each trace group to distilled step format
   const steps = [];
 
@@ -495,6 +510,43 @@ function distillJsonLogs(logs) {
       }
     }
   }
+  // Propagate ariaName: if a step has no ariaName on its target but has
+  // valueChanges with ariaName, copy it to the target. This handles the common
+  // case where the interaction event (click on <input>/<canvas>) lacks aria info
+  // but the resulting value:change from wrapComponent has it.
+  for (const step of steps) {
+    if (!step.target?.ariaName && step.valueChanges?.length > 0) {
+      const vcWithAria = step.valueChanges.find(vc => vc.ariaName);
+      if (vcWithAria) {
+        step.target.ariaName = vcWithAria.ariaName;
+      }
+    }
+  }
+
+  // Propagate ariaName from non-interaction trace groups (value:change,
+  // focus:change) to the nearest preceding interaction step that lacks one.
+  // This handles the case where wrapComponent's behavioral events land in
+  // separate traceIds from the browser interaction events.
+  if (ariaNameByTs.length > 0) {
+    let ariaIdx = 0;
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const stepTs = step._firstPerfTs || 0;
+      // Advance ariaIdx to the first entry after this step
+      while (ariaIdx < ariaNameByTs.length && ariaNameByTs[ariaIdx].ts <= stepTs) {
+        ariaIdx++;
+      }
+      // Look ahead: find ariaName entries between this step and the next
+      const nextStepTs = steps[i + 1]?._firstPerfTs || Infinity;
+      if (!step.target?.ariaName) {
+        for (let j = ariaIdx; j < ariaNameByTs.length && ariaNameByTs[j].ts < nextStepTs; j++) {
+          step.target.ariaName = ariaNameByTs[j].ariaName;
+          break;
+        }
+      }
+    }
+  }
+
   // Clean up internal metadata
   for (const step of steps) {
     delete step._submenuOpens;
@@ -671,6 +723,20 @@ function extractStepFromJsonLogs(trace) {
   }
   if (interaction.detail?.ariaName) {
     target.ariaName = interaction.detail.ariaName;
+  }
+
+  // Fallback: if the interaction didn't carry an ariaName (e.g., click on inner
+  // <input> or <canvas>), pull it from behavioral events (value:change,
+  // focus:change, native:*) in the same trace group that have ariaName set
+  // by the wrapComponent aria-label cascade.
+  if (!target.ariaName) {
+    const behavioral = events.find(e =>
+      (e.kind === 'value:change' || e.kind === 'focus:change' || e.kind?.startsWith('native:')) &&
+      e.ariaName
+    );
+    if (behavioral) {
+      target.ariaName = behavioral.ariaName;
+    }
   }
 
   // Capture testId (uid) as fallback selector when ARIA isn't available
