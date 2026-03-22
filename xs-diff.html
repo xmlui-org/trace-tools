@@ -2030,6 +2030,8 @@
         if (entry.componentLabel?.startsWith("vite-") || entry.uid?.startsWith("vite-")) return false;
         // Hide XMLUI Inspector interactions (inspector UI itself)
         if (entry.componentLabel === "XMLUI Inspector" || (entry.componentLabel && entry.componentLabel.includes("Inspector"))) return false;
+        if (entry.ariaName === "Inspector" || entry.detail?.ariaName === "Inspector") return false;
+        if (entry.detail?.targetText === "Inspector" || entry.detail?.text?.includes("Inspector")) return false;
         // Hide inspector activation events
         const code = entry.code || entry.arrow || entry.handlerCode || "";
         if (code.includes("inspectorDialog.open")) return false;
@@ -4993,6 +4995,10 @@
         document.querySelectorAll(".search-match-container").forEach(el => {
           el.classList.remove("search-match-container");
         });
+        // Restore visibility of all trace groups
+        document.querySelectorAll(".trace-group").forEach(group => {
+          group.style.display = "";
+        });
         searchState.matches = [];
         searchState.currentIndex = -1;
         updateSearchCount();
@@ -5097,6 +5103,13 @@
 
         searchState.matches = highlightTextInNode(diffEl, regex);
         searchState.currentIndex = searchState.matches.length > 0 ? 0 : -1;
+
+        // Filter: hide trace groups that don't contain any matches
+        const groups = diffEl.querySelectorAll(".trace-group");
+        groups.forEach((group) => {
+          const hasMatch = group.querySelector(".search-highlight");
+          group.style.display = hasMatch ? "" : "none";
+        });
 
         if (searchState.matches.length > 0) {
           navigateToMatch(0);
