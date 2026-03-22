@@ -4717,90 +4717,41 @@
                 let foundFile = null;
                 let foundInlineValue = null;
 
+                // Use the XMLUI parser to find AppState elements by bucket
                 for (const file of sourceFiles) {
                   const source = await fetchSourceRange(file, 0, 999999);
                   if (!source) continue;
 
-                  // For "default" bucket, find AppState without explicit bucket attribute
-                  if (bucketName === "default") {
-                    // Find <AppState ...> elements
-                    const lines = source.split('\n');
-                    for (let i = 0; i < lines.length; i++) {
-                      if (lines[i].includes('<AppState')) {
-                        // Find the complete AppState element
-                        let startLine = i;
-                        let endLine = i;
-                        while (endLine < lines.length && !lines[endLine].includes('/>') && !lines[endLine].includes('</AppState>') && !lines[endLine].includes('>')) endLine++;
+                  try {
+                    const xmlui = new XmluiSource(source, file);
+                    const appStates = xmlui.findByTagName("AppState");
 
-                        const appStateBlock = lines.slice(startLine, endLine + 1).join('\n');
-                        // Skip if it has an explicit bucket attribute (not the default)
-                        if (/bucket\s*=/.test(appStateBlock)) continue;
+                    for (const el of appStates) {
+                      const elBucket = el.attributes.bucket || "default";
+                      if (elBucket !== bucketName) continue;
 
-                        // Found default AppState - check for initialValue
-                        const funcMatch = appStateBlock.match(/initialValue\s*=\s*["']\{\s*(\w+)\s*\(/);
-                        if (funcMatch) {
-                          foundFunc = funcMatch[1];
-                          foundFile = file;
-                          break;
-                        }
-                        // Check for inline value
-                        const inlineMatch = appStateBlock.match(/initialValue\s*=\s*["']\{\{([\s\S]*?)\}\}["']/);
-                        if (inlineMatch) {
-                          foundInlineValue = { content: inlineMatch[1].trim(), startLine: startLine + 1, file };
-                          break;
-                        }
+                      foundFile = file;
+                      const initialValue = el.attributes.initialValue || "";
+
+                      // Check for function call: initialValue="{loadData()}"
+                      const funcMatch = initialValue.match(/^\{?\s*(\w+)\s*\(/);
+                      if (funcMatch) {
+                        foundFunc = funcMatch[1];
+                        break;
                       }
-                    }
-                    if (foundFunc || foundInlineValue) break;
-                    continue;
-                  }
 
-                  // Look for bucket="bucketName" with initialValue function call
-                  const bucketPattern = new RegExp(`bucket\\s*=\\s*["']${bucketName}["'][^>]*initialValue\\s*=\\s*["']\\{\\s*(\\w+)\\s*\\(`, 'i');
-                  const match = source.match(bucketPattern);
-                  if (match) {
-                    foundFunc = match[1];
-                    foundFile = file;
-                    break;
-                  }
-                  // Also try reverse order: initialValue before bucket
-                  const reversePattern = new RegExp(`initialValue\\s*=\\s*["']\\{\\s*(\\w+)\\s*\\([^>]*bucket\\s*=\\s*["']${bucketName}["']`, 'i');
-                  const reverseMatch = source.match(reversePattern);
-                  if (reverseMatch) {
-                    foundFunc = reverseMatch[1];
-                    foundFile = file;
-                    break;
-                  }
-
-                  // Look for inline object literal: initialValue="{{...}}"
-                  const inlinePattern = new RegExp(`bucket\\s*=\\s*["']${bucketName}["']`, 'i');
-                  if (inlinePattern.test(source)) {
-                    // Find the AppState element and extract initialValue
-                    const lines = source.split('\n');
-                    for (let i = 0; i < lines.length; i++) {
-                      if (lines[i].includes(`bucket="${bucketName}"`) || lines[i].includes(`bucket='${bucketName}'`)) {
-                        // Look backwards and forwards for the full AppState element
-                        let startLine = i;
-                        let endLine = i;
-                        // Find start of AppState
-                        while (startLine > 0 && !lines[startLine].includes('<AppState')) startLine--;
-                        // Find end (closing > or />)
-                        while (endLine < lines.length && !lines[endLine].includes('/>') && !lines[endLine].includes('</AppState>')) endLine++;
-
-                        const appStateBlock = lines.slice(startLine, endLine + 1).join('\n');
-                        // Extract initialValue content
-                        const inlineMatch = appStateBlock.match(/initialValue\s*=\s*["']\{\{([\s\S]*?)\}\}["']/);
-                        if (inlineMatch) {
-                          foundInlineValue = inlineMatch[1].trim();
-                          foundFile = file;
-                          // Store line number for display
-                          foundInlineValue = { content: foundInlineValue, startLine: startLine + 1, file };
-                        }
+                      // Check for inline object: initialValue="{{foo: 1}}"
+                      const inlineMatch = initialValue.match(/^\{\{([\s\S]*?)\}\}$/);
+                      if (inlineMatch) {
+                        foundInlineValue = { content: inlineMatch[1].trim(), startLine: el.startLine, file };
                         break;
                       }
                     }
-                    if (foundInlineValue) break;
+                  } catch (e) {
+                    // Parser failed — skip this file
                   }
+
+                  if (foundFunc || foundInlineValue) break;
                 }
 
                 if (foundFunc && foundFile) {
@@ -4906,18 +4857,27 @@
                 }
 
                 if (!foundFunc) {
-                  // Try searching other files for bucket reference
+                  // Try searching other files for AppState with matching bucket
                   for (const file of sourceFiles) {
                     const source = await fetchSourceRange(file, 0, 999999);
                     if (!source) continue;
 
-                    const bucketPattern = new RegExp(`bucket\\s*=\\s*["']${bucketName}["'][^>]*initialValue\\s*=\\s*["']\\{\\s*(\\w+)\\s*\\(`, 'i');
-                    const match = source.match(bucketPattern);
-                    if (match) {
-                      foundFunc = match[1];
-                      foundFile = file;
-                      break;
-                    }
+                    try {
+                      const xmlui = new XmluiSource(source, file);
+                      const appStates = xmlui.findByTagName("AppState");
+                      for (const el of appStates) {
+                        if ((el.attributes.bucket || "default") === bucketName && el.attributes.initialValue) {
+                          const funcMatch = el.attributes.initialValue.match(/^\{?\s*(\w+)\s*\(/);
+                          if (funcMatch) {
+                            foundFunc = funcMatch[1];
+                            foundFile = file;
+                            break;
+                          }
+                        }
+                      }
+                    } catch (e) { /* parser failed */ }
+
+                    if (foundFunc) break;
                   }
                 }
 
@@ -6765,6 +6725,63 @@
           const xmlui = new XmluiSource(source, "test.xmlui");
           const btn = xmlui.findById("staticId");
           assertTrue(btn !== null, "Should find element with static id");
+        });
+
+        // =========================================================================
+        // TEST SUITE: XMLUI Parser — AppState/DataSource lookup
+        // =========================================================================
+        test("XMLUI Parser", "findByTagName finds AppState elements", () => {
+          const source = `<App><AppState id="s1" bucket="main" initialValue="{loadData()}" /><AppState id="s2" bucket="other" /></App>`;
+          const xmlui = new XmluiSource(source, "test.xmlui");
+          const states = xmlui.findByTagName("AppState");
+          assertEqual(states.length, 2, "Should find 2 AppState elements");
+          assertEqual(states[0].attributes.bucket, "main");
+          assertEqual(states[1].attributes.bucket, "other");
+        });
+
+        test("XMLUI Parser", "findByTagName finds DataSource elements", () => {
+          const source = `<App><DataSource id="users" url="https://api.example.com/users" /></App>`;
+          const xmlui = new XmluiSource(source, "test.xmlui");
+          const sources = xmlui.findByTagName("DataSource");
+          assertEqual(sources.length, 1, "Should find 1 DataSource");
+          assertEqual(sources[0].attributes.id, "users");
+          assertEqual(sources[0].attributes.url, "https://api.example.com/users");
+        });
+
+        test("XMLUI Parser", "findById distinguishes DataSource from AppState", () => {
+          const source = `<App><DataSource id="users" url="/api" /><AppState id="state1" bucket="main" /></App>`;
+          const xmlui = new XmluiSource(source, "test.xmlui");
+          const ds = xmlui.findById("users");
+          const as = xmlui.findById("state1");
+          assertEqual(ds.tagName, "DataSource", "Should identify DataSource");
+          assertEqual(as.tagName, "AppState", "Should identify AppState");
+        });
+
+        test("XMLUI Parser", "AppState without bucket defaults to 'default'", () => {
+          const source = `<App><AppState id="s1" initialValue="{init()}" /></App>`;
+          const xmlui = new XmluiSource(source, "test.xmlui");
+          const states = xmlui.findByTagName("AppState");
+          assertEqual(states.length, 1);
+          assertEqual(states[0].attributes.bucket, undefined, "No explicit bucket");
+          // Code should treat missing bucket as "default"
+        });
+
+        test("XMLUI Parser", "initialValue function name extraction", () => {
+          const source = `<App><AppState id="s1" bucket="main" initialValue="{loadData()}" /></App>`;
+          const xmlui = new XmluiSource(source, "test.xmlui");
+          const el = xmlui.findById("s1");
+          const match = el.attributes.initialValue.match(/^\{?\s*(\w+)\s*\(/);
+          assertTrue(match !== null, "Should match function pattern");
+          assertEqual(match[1], "loadData", "Should extract function name");
+        });
+
+        test("XMLUI Parser", "initialValue inline object extraction", () => {
+          const source = `<App><AppState id="s1" bucket="main" initialValue="{{foo: 1, bar: 2}}" /></App>`;
+          const xmlui = new XmluiSource(source, "test.xmlui");
+          const el = xmlui.findById("s1");
+          const match = el.attributes.initialValue.match(/^\{\{([\s\S]*?)\}\}$/);
+          assertTrue(match !== null, "Should match inline object pattern");
+          assertContains(match[1], "foo: 1", "Should extract object content");
         });
 
         // =========================================================================
