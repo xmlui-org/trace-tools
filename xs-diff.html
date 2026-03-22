@@ -1470,12 +1470,28 @@
                 }
 
                 if (outputSections.length === 0) {
-                  // No useful content found
-                  codeEl.textContent = "// Source not found";
-                } else {
+                  // Fallback: use character range if available
+                  const startChar = parseInt(detailsEl.dataset.start, 10);
+                  const endChar = parseInt(detailsEl.dataset.end, 10);
+                  const xmluiFallback = await fetchSourceRange(filePath, 0, 999999);
+                  if (xmluiFallback && !isNaN(startChar) && !isNaN(endChar)) {
+                    const snippet = xmluiFallback.substring(startChar, endChar);
+                    const lines = snippet.split("\n");
+                    const preSnippet = xmluiFallback.substring(0, startChar);
+                    const startLine = preSnippet.split("\n").length;
+                    const formatted = lines.map((line, i) => {
+                      const lineNum = String(startLine + i).padStart(4);
+                      return `  ${lineNum}: ${line}`;
+                    }).join("\n");
+                    outputSections.push(`// ${filePath.split("/").pop()}\n${formatted}`);
+                  }
+                }
+                if (outputSections.length > 0) {
                   codeEl.innerHTML = outputSections.join("\n")
                     .replace(/</g, "&lt;")
                     .replace(/^→ (.*)$/gm, '<span class="highlight-line">→ $1</span>');
+                } else {
+                  codeEl.textContent = "// Source not found";
                 }
               } catch (err) {
                 codeEl.textContent = "Error loading source: " + err.message;
@@ -3890,10 +3906,10 @@
                 // Native events: plain source expander (event isn't declared in XMLUI markup)
                 bodyHtml += `<details class="source-loader" data-file="${evt.meta.resolvedFile}" data-start="${startChar}" data-end="${endChar}">`;
               } else {
-                // value:change, focus:change, etc.: search for the handler attribute in source
+                // value:change, focus:change, etc.: search for the handler attribute in source, with char range fallback
                 const eventName = e.eventName || "";
                 const componentLabel = e.componentLabel || "";
-                bodyHtml += `<details class="source-loader" data-file="${evt.meta.resolvedFile}" data-handler-name="${eventName}" data-component-label="${componentLabel}" data-search-handler="true">`;
+                bodyHtml += `<details class="source-loader" data-file="${evt.meta.resolvedFile}" data-start="${startChar}" data-end="${endChar}" data-handler-name="${eventName}" data-component-label="${componentLabel}" data-search-handler="true">`;
               }
               bodyHtml += `<summary>XMLUI Source</summary>`;
               bodyHtml += `<pre class="source-code">Click to load...</pre>`;
@@ -6698,33 +6714,73 @@
         // TEST SUITE: shouldIncludeTrace
         // =========================================================================
         test("shouldIncludeTrace", "returns false for empty trace", () => {
-          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 0 } };
+          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 0, interactionCount: 0 } };
           assertEqual(shouldIncludeTrace(item), false, "Empty trace should not be included");
         });
 
         test("shouldIncludeTrace", "returns true for trace with changes", () => {
-          const item = { traceId: "t-test", summary: { changeCount: 1, hasError: false, startCount: 0, behavioralEventCount: 0 } };
+          const item = { traceId: "t-test", summary: { changeCount: 1, hasError: false, startCount: 0, behavioralEventCount: 0, interactionCount: 0 } };
           assertEqual(shouldIncludeTrace(item), true, "Trace with changes should be included");
         });
 
         test("shouldIncludeTrace", "returns true for trace with error", () => {
-          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: true, startCount: 0, behavioralEventCount: 0 } };
+          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: true, startCount: 0, behavioralEventCount: 0, interactionCount: 0 } };
           assertEqual(shouldIncludeTrace(item), true, "Trace with error should be included");
         });
 
         test("shouldIncludeTrace", "returns true for trace with handlers", () => {
-          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: false, startCount: 1, behavioralEventCount: 0 } };
+          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: false, startCount: 1, behavioralEventCount: 0, interactionCount: 0 } };
           assertEqual(shouldIncludeTrace(item), true, "Trace with handlers should be included");
         });
 
         test("shouldIncludeTrace", "returns true for trace with behavioral events", () => {
-          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 1 } };
+          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 1, interactionCount: 0 } };
           assertEqual(shouldIncludeTrace(item), true, "Trace with behavioral events should be included");
         });
 
         test("shouldIncludeTrace", "returns true for empty startup trace", () => {
-          const item = { traceId: "startup-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 0 } };
+          const item = { traceId: "startup-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 0, interactionCount: 0 } };
           assertEqual(shouldIncludeTrace(item), true, "Startup trace should always be included");
+        });
+
+        test("shouldIncludeTrace", "returns true for interaction-only trace", () => {
+          const item = { traceId: "i-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 0, interactionCount: 1 } };
+          assertEqual(shouldIncludeTrace(item), true, "Interaction-only trace should be included");
+        });
+
+        test("shouldIncludeTrace", "returns false when all counts are zero", () => {
+          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 0, interactionCount: 0 } };
+          assertEqual(shouldIncludeTrace(item), false, "Trace with no content and no interactions should not be included");
+        });
+
+        // =========================================================================
+        // TEST SUITE: interaction-only trace componentText
+        // =========================================================================
+        test("Trace Summary", "interaction-only trace shows component type with aria-label", () => {
+          const entries = [
+            { kind: "interaction", traceId: "i-test", componentType: "RadioGroup", componentLabel: "Item selector", interaction: "click", ariaName: "First Item", ts: 100, perfTs: 100 },
+          ];
+          const summary = buildTraceSummary(entries);
+          assertContains(summary.componentText, "RadioGroup", "Should contain component type");
+          assertContains(summary.componentText, "Item selector", "Should contain aria-label");
+          assertContains(summary.componentText, "click", "Should contain interaction type");
+        });
+
+        test("Trace Summary", "interaction-only trace without aria-label shows component type", () => {
+          const entries = [
+            { kind: "interaction", traceId: "i-test2", componentType: "Button", componentLabel: "Button", interaction: "click", ts: 100, perfTs: 100 },
+          ];
+          const summary = buildTraceSummary(entries);
+          assertContains(summary.componentText, "Button", "Should contain component type");
+          assertEqual(summary.componentText.indexOf("\u00ab"), -1, "Should not have guillemets when label equals type");
+        });
+
+        test("Trace Summary", "interactionCount is populated in summary", () => {
+          const entries = [
+            { kind: "interaction", traceId: "i-test3", componentType: "Checkbox", componentLabel: "agree", interaction: "click", ts: 100, perfTs: 100 },
+          ];
+          const summary = buildTraceSummary(entries);
+          assertEqual(summary.interactionCount, 1, "Should count interaction events");
         });
 
         // =========================================================================
@@ -6828,8 +6884,9 @@
         // =========================================================================
         // TEST SUITE: Trace Filtering
         // =========================================================================
-        test("Trace Filtering", "empty trace is hidden in both views", () => {
-          // Trace with no state changes, no errors, no handlers, no behavioral events
+        test("Trace Filtering", "interaction-only trace is shown in both views", () => {
+          // Trace with only an interaction event (no handlers, no state changes)
+          // should now be shown since interactions are valid content
           const traceId = TestFramework.interactionTraceId();
           const entries = [
             TestFramework.events.interaction("click", "EmptyButton", { traceId, perfTs: 100 }),
@@ -6837,8 +6894,8 @@
           const processed = processAllEntries(entries);
           const pretty = renderPrettyView(processed);
           const raw = renderRawView(processed);
-          assertTrue(!pretty.includes("EmptyButton"), "Empty trace should be hidden in pretty view");
-          assertTrue(!raw.includes("EmptyButton"), "Empty trace should be hidden in raw view");
+          assertContains(pretty, "EmptyButton", "Interaction-only trace should be shown in pretty view");
+          assertContains(raw, "EmptyButton", "Interaction-only trace should be shown in raw view");
         });
 
         test("Trace Filtering", "trace with only state changes is shown", () => {
@@ -7037,8 +7094,8 @@
           const prettyCount = (pretty.match(/trace-group/g) || []).length;
           const rawCount = (raw.match(/--- Trace \d+:/g) || []).length;
           assertEqual(prettyCount, rawCount, "Pretty and raw should show same trace count for mixed scenario");
-          // Both should show 2 traces (handler + native), not the empty one
-          assertEqual(rawCount, 2, "Should show 2 traces (handler + native event), not empty");
+          // All 3 traces should show: handler, native event, and interaction-only
+          assertEqual(rawCount, 3, "Should show 3 traces (handler + native event + interaction-only)");
         });
 
         test("Cross-View Consistency", "startup trace appears in both views", () => {
