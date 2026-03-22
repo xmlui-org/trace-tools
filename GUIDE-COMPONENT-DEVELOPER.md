@@ -176,6 +176,47 @@ onNativeEvent({
 
 The inspector shows `displayLabel` in the timeline. Without it, you just see the event type. With it, you see what the event *meant*.
 
+## Understanding `customRender`
+
+When browsing XMLUI's source, you'll see many components use `customRender`:
+
+```ts
+wrapComponent(COMP, MyComponent, MyMd, {
+  customRender(props, context) {
+    const { node, extractValue, renderChild, classes } = context;
+    const sticky = extractValue.asOptionalBoolean(node.props.sticky, true);
+    return <MyComponent classes={classes} sticky={sticky}>{renderChild(node.children)}</MyComponent>;
+  },
+});
+```
+
+**You probably don't need this.** Most of these exist because XMLUI's core components were migrated from an older pattern (`createComponentRenderer`) in bulk, and `customRender` was the safest mechanical conversion — move the existing render function in verbatim, get tracing for free.
+
+Without `customRender`, `wrapComponent` automatically:
+
+- Extracts all props using type info from metadata (`boolean` → `asOptionalBoolean`, etc.)
+- Applies default values from metadata
+- Maps events to React callbacks with auto-tracing
+- Renders XMLUI children as React nodes
+- Handles `templates` and `renderers` for `ComponentDef` props
+
+For most components — especially third-party wraps — the simple pattern is all you need:
+
+```ts
+wrapComponent(COMP, MyChart, MyChartMd, {
+  captureNativeEvents: true,
+  deriveAriaLabel: (props) => props.title || "Chart",
+});
+```
+
+### When you actually need `customRender`
+
+- **Custom children layout**: the component renders children differently based on props (e.g., Stack switches between horizontal/vertical)
+- **Multiple render targets**: the component creates several React elements from one XMLUI node
+- **Non-standard prop plumbing**: the native component's API doesn't match XMLUI's prop conventions and can't be handled by `exclude`, `rename`, or `events` config
+
+If your `customRender` is mostly `extractValue.asOptionalBoolean` calls and `lookupEventHandler` mappings, it can likely be replaced by declaring the right `valueType` in metadata and using the `events` config.
+
 ## What you don't need to do
 
 - **No ARIA work required.** The cascade handles it.
