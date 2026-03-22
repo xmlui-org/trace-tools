@@ -2184,7 +2184,7 @@
        */
       function shouldIncludeTrace(item) {
         const isStartup = item.traceId && item.traceId.startsWith("startup-");
-        const hasContent = item.summary.changeCount > 0 || item.summary.hasError || item.summary.startCount > 0 || item.summary.behavioralEventCount > 0;
+        const hasContent = item.summary.changeCount > 0 || item.summary.hasError || item.summary.startCount > 0 || item.summary.behavioralEventCount > 0 || item.summary.interactionCount > 0;
         return hasContent || isStartup;
       }
 
@@ -2223,10 +2223,13 @@
             traceEntries.find((e) => e.kind === "native:click" || e.kind === "native:dblclick") ||
             traceEntries.find((e) => e.kind?.startsWith("native:"));
           if (interaction) {
-            const label = interaction.componentLabel || interaction.uid || "Unknown";
+            const type = interaction.componentType || "";
+            const rawLabel = interaction.componentLabel || interaction.uid || "Unknown";
+            // Show both component type and label when label is an aria-label (differs from type)
+            const label = type && rawLabel !== type ? `${type} «${rawLabel}»` : rawLabel;
             const action = interaction.interaction || interaction.eventName || "";
             const detailTextContent = interaction.detail?.text;
-            const hasOnlyTag = /^[a-z]+$/.test(label);
+            const hasOnlyTag = /^[a-z]+$/.test(rawLabel);
             const contextText = hasOnlyTag && detailTextContent && detailTextContent.length < 40 ? ` "${detailTextContent}"` : "";
             componentText = action ? `${label}${contextText} ${action}` : label + contextText;
             // If there's also a native event with a displayLabel, append it
@@ -2447,10 +2450,13 @@
         const sourceFile = firstStart ? resolveFileLabel(firstStart.ownerFileId) : null;
         const handlerCode = firstStart?.handlerCode || null;
 
+        const interactionCount = traceEntries.filter((e) => e.kind === "interaction").length;
+
         return {
           componentText: componentText || "Unknown trace",
           changeCount,
           behavioralEventCount,
+          interactionCount,
           hasError: !!error,
           multipleStarts: handlerNames.length > 1,
           handlerNames,
