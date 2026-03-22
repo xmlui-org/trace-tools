@@ -3917,6 +3917,30 @@
             }
           }
 
+          // Render array diff for value:change events with prevValue/newValue (e.g. ChangeListener)
+          if (e.kind === "value:change" && e.prevValue !== undefined && e.newValue !== undefined) {
+            if (Array.isArray(e.newValue)) {
+              const prev = e.prevValue || [];
+              const next = e.newValue;
+              const prevNames = prev.map(i => i.name || i.id || JSON.stringify(i).slice(0, 40));
+              const nextNames = next.map(i => i.name || i.id || JSON.stringify(i).slice(0, 40));
+              const added = nextNames.filter(n => !prevNames.includes(n));
+              const removed = prevNames.filter(n => !nextNames.includes(n));
+              let diffHtml = `<div class="trace-meta" style="margin-left: var(--space-4, 16px); margin-top: 4px;">`;
+              diffHtml += `<strong>${prev.length} \u2192 ${next.length} items</strong>`;
+              if (added.length > 0) {
+                diffHtml += `<div style="color: var(--color-success, green);">+${added.length} added</div>`;
+                added.forEach(n => { diffHtml += `<div style="color: var(--color-success, green); margin-left: var(--space-4, 16px);">+ ${n}</div>`; });
+              }
+              if (removed.length > 0) {
+                diffHtml += `<div style="color: var(--color-error, red);">-${removed.length} removed</div>`;
+                removed.forEach(n => { diffHtml += `<div style="color: var(--color-error, red); margin-left: var(--space-4, 16px);">- ${n}</div>`; });
+              }
+              diffHtml += `</div>`;
+              bodyHtml += diffHtml;
+            }
+          }
+
           // Skip diff for component:vars (handled separately with their own diff display)
           if (Array.isArray(e.diffJson) && e.diffJson.length && e.kind !== "component:vars:init" && e.kind !== "component:vars:change") {
             let usedArraySummary = false;
@@ -6781,6 +6805,41 @@
           ];
           const summary = buildTraceSummary(entries);
           assertEqual(summary.interactionCount, 1, "Should count interaction events");
+        });
+
+        // =========================================================================
+        // TEST SUITE: listenTo:change
+        // =========================================================================
+        test("listenTo:change", "is treated as behavioral event (not infrastructure)", () => {
+          const entries = [
+            { kind: "listenTo:change", traceId: "t-test-lc", component: "ChangeListener", displayLabel: "0 → 2 items", ts: 100, perfTs: 100 },
+          ];
+          const summary = buildTraceSummary(entries);
+          assertTrue(summary.behavioralEventCount > 0, "listenTo:change should count as behavioral");
+        });
+
+        test("listenTo:change", "trace with only listenTo:change passes shouldIncludeTrace", () => {
+          const item = { traceId: "t-test-lc2", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 1, interactionCount: 0 } };
+          assertEqual(shouldIncludeTrace(item), true, "Trace with listenTo:change should be included");
+        });
+
+        test("listenTo:change", "displayLabel appears in trace componentText", () => {
+          const entries = [
+            { kind: "listenTo:change", traceId: "t-test-lc3", component: "ChangeListener", displayLabel: "2 → 3 items", ts: 100, perfTs: 100 },
+          ];
+          const summary = buildTraceSummary(entries);
+          assertContains(summary.componentText, "listenTo:change", "Should derive title from event kind");
+        });
+
+        test("listenTo:change", "appears alongside handler events in same trace", () => {
+          const entries = [
+            { kind: "listenTo:change", traceId: "t-test-lc4", component: "ChangeListener", displayLabel: "0 → 2 items", ts: 100, perfTs: 100 },
+            { kind: "handler:start", traceId: "t-test-lc4", eventName: "didChange", componentType: "ChangeListener", ts: 101, perfTs: 101 },
+            { kind: "handler:complete", traceId: "t-test-lc4", eventName: "didChange", componentType: "ChangeListener", ts: 110, perfTs: 110 },
+          ];
+          const summary = buildTraceSummary(entries);
+          assertTrue(summary.behavioralEventCount > 0, "Should count listenTo:change as behavioral");
+          assertTrue(summary.startCount > 0, "Should also count handler:start");
         });
 
         // =========================================================================
