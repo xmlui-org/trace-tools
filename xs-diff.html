@@ -1260,12 +1260,22 @@
 
       // Fetch and cache source file contents
       const sourceCache = new Map();
+      // Resolve relative paths against the parent window's origin (app root),
+      // not the iframe's directory (xmlui/). Used by fetchSourceRange and openFileModal.
+      function resolveAppUrl(filePath) {
+        if (filePath.includes("://")) return filePath;
+        const parentOrigin = (window.parent && window.parent !== window)
+          ? window.parent.location.origin
+          : window.location.origin;
+        return parentOrigin + "/" + filePath.replace(/^\//, "");
+      }
+
       async function fetchSourceRange(filePath, startChar, endChar) {
         if (!filePath) return null;
         try {
           let content = sourceCache.get(filePath);
           if (!content) {
-            const resp = await fetch(filePath);
+            const resp = await fetch(resolveAppUrl(filePath));
             if (!resp.ok) return null;
             content = await resp.text();
             // Validate content isn't HTML (SPA fallback returns index.html for missing files)
@@ -4844,60 +4854,70 @@
               if (!details.open || loaded) return;
               loaded = true;
               const pre = details.querySelector("pre");
-              pre.textContent = "Searching for AppState definition...";
+              pre.textContent = "Searching for component definition...";
 
               try {
                 const sourceFiles = getSourceFileList();
                 let bucketName = null;
                 let foundFile = null;
                 let foundFunc = null;
+                let componentTag = null;
+                let element = null;
 
-                // Step 1: Find <AppState id="stateId" to get the bucket name
+                // Step 1: Use the XMLUI parser to find the element by id
                 for (const file of sourceFiles) {
                   const source = await fetchSourceRange(file, 0, 999999);
                   if (!source) continue;
 
-                  // Look for <AppState id="stateId" ... bucket="bucketName"
-                  const idPattern = new RegExp(`<AppState[^>]*\\bid\\s*=\\s*["']${stateId}["'][^>]*bucket\\s*=\\s*["'](\\w+)["']`, 'i');
-                  const match = source.match(idPattern);
-                  if (match) {
-                    bucketName = match[1];
-                    foundFile = file;
-                    break;
-                  }
-                  // Try reverse order
-                  const reversePattern = new RegExp(`<AppState[^>]*bucket\\s*=\\s*["'](\\w+)["'][^>]*\\bid\\s*=\\s*["']${stateId}["']`, 'i');
-                  const reverseMatch = source.match(reversePattern);
-                  if (reverseMatch) {
-                    bucketName = reverseMatch[1];
-                    foundFile = file;
-                    break;
+                  try {
+                    const xmlui = new XmluiSource(source, file);
+                    const el = xmlui.findById(stateId);
+                    if (el) {
+                      element = el;
+                      componentTag = el.tagName;
+                      foundFile = file;
+                      bucketName = el.attributes.bucket || stateId;
+                      break;
+                    }
+                  } catch (e) {
+                    // Parser failed — skip this file
                   }
                 }
 
-                if (!bucketName) {
-                  pre.textContent = `// Could not find <AppState id="${stateId}" ...>\n// Searched ${sourceFiles.length} source files`;
+                if (!element) {
+                  pre.textContent = `// Could not find element with id="${stateId}"\n// Searched ${sourceFiles.length} source files`;
                   return;
                 }
 
-                // Step 2: Find the initialValue function for this bucket
-                for (const file of sourceFiles) {
-                  const source = await fetchSourceRange(file, 0, 999999);
-                  if (!source) continue;
+                // For DataSource, show the element source directly (no initialValue to find)
+                if (componentTag === "DataSource") {
+                  const attrs = Object.entries(element.attributes).map(([k, v]) => `${k}="${v}"`).join(" ");
+                  pre.textContent = `// DataSource id="${stateId}" in ${foundFile.split("/").pop()}\n// ${stateId}.value.${methodName}() is a JavaScript array method on the fetched data\n\n<${componentTag} ${attrs} />`;
+                  return;
+                }
 
-                  const bucketPattern = new RegExp(`bucket\\s*=\\s*["']${bucketName}["'][^>]*initialValue\\s*=\\s*["']\\{\\s*(\\w+)\\s*\\(`, 'i');
-                  const match = source.match(bucketPattern);
-                  if (match) {
-                    foundFunc = match[1];
-                    foundFile = file;
-                    break;
+                // Step 2: For AppState, find the initialValue function
+                const initialValue = element.attributes.initialValue;
+                if (initialValue) {
+                  const funcMatch = initialValue.match(/\{\s*(\w+)\s*\(/);
+                  if (funcMatch) {
+                    foundFunc = funcMatch[1];
                   }
-                  const reversePattern = new RegExp(`initialValue\\s*=\\s*["']\\{\\s*(\\w+)\\s*\\([^>]*bucket\\s*=\\s*["']${bucketName}["']`, 'i');
-                  const reverseMatch = source.match(reversePattern);
-                  if (reverseMatch) {
-                    foundFunc = reverseMatch[1];
-                    foundFile = file;
-                    break;
+                }
+
+                if (!foundFunc) {
+                  // Try searching other files for bucket reference
+                  for (const file of sourceFiles) {
+                    const source = await fetchSourceRange(file, 0, 999999);
+                    if (!source) continue;
+
+                    const bucketPattern = new RegExp(`bucket\\s*=\\s*["']${bucketName}["'][^>]*initialValue\\s*=\\s*["']\\{\\s*(\\w+)\\s*\\(`, 'i');
+                    const match = source.match(bucketPattern);
+                    if (match) {
+                      foundFunc = match[1];
+                      foundFile = file;
+                      break;
+                    }
                   }
                 }
 
@@ -6856,6 +6876,37 @@
         });
 
         // =========================================================================
+        // TEST SUITE: resolveAppUrl
+        // =========================================================================
+        test("resolveAppUrl", "returns full URL unchanged", () => {
+          const url = "http://localhost:8000/Main.xmlui";
+          assertEqual(resolveAppUrl(url), url, "Full URL should pass through unchanged");
+        });
+
+        test("resolveAppUrl", "returns https URL unchanged", () => {
+          const url = "https://example.com/app/Main.xmlui";
+          assertEqual(resolveAppUrl(url), url, "HTTPS URL should pass through unchanged");
+        });
+
+        test("resolveAppUrl", "resolves relative path against origin", () => {
+          const result = resolveAppUrl("Main.xmlui");
+          assertTrue(result.includes("://"), "Should produce a full URL");
+          assertTrue(result.endsWith("/Main.xmlui"), "Should end with the filename");
+        });
+
+        test("resolveAppUrl", "strips leading slash from relative path", () => {
+          const result = resolveAppUrl("/Main.xmlui");
+          assertTrue(!result.includes("//Main.xmlui"), "Should not have double slash before filename");
+          assertTrue(result.endsWith("/Main.xmlui"), "Should end with the filename");
+        });
+
+        test("resolveAppUrl", "handles nested relative paths", () => {
+          const result = resolveAppUrl("components/MyComp.xmlui");
+          assertTrue(result.includes("://"), "Should produce a full URL");
+          assertTrue(result.endsWith("/components/MyComp.xmlui"), "Should preserve path");
+        });
+
+        // =========================================================================
         // TEST SUITE: parseHandlerCode
         // =========================================================================
         test("parseHandlerCode", "detects apiCall with method before url", () => {
@@ -7641,7 +7692,7 @@
         modalFileContent.textContent = "Loading...";
         fileModal.classList.add("open");
 
-        fetch(filePath)
+        fetch(resolveAppUrl(filePath))
           .then(res => {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             return res.text();
