@@ -10,6 +10,29 @@
 import type { Page } from '@playwright/test';
 import * as fs from 'fs';
 
+/**
+ * Inject a file-upload event into the XMLUI trace so the distiller and
+ * generator can replay it with setInputFiles().
+ *
+ * Call this right after page.locator('input[type="file"]').setInputFiles():
+ *
+ *   await fileInput.setInputFiles('path/to/file.m4a');
+ *   await traceFileUpload(page, ['file.m4a']);
+ */
+export async function traceFileUpload(page: Page, fileNames: string[]): Promise<void> {
+  await page.evaluate((names) => {
+    const logs = (window as any)._xsLogs;
+    if (!logs) return;
+    logs.push({
+      ts: Date.now(),
+      perfTs: performance.now(),
+      kind: 'value:change',
+      component: 'FileInput',
+      files: names.map(name => ({ name })),
+    });
+  }, fileNames);
+}
+
 export async function captureTrace(page: Page): Promise<void> {
   try {
     await page.waitForTimeout(500);

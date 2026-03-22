@@ -927,7 +927,7 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
       }
       const changedStringFields = refFormData
         ? allStringFields.filter(([k, v]) => refFormData[k] !== v)
-        : allStringFields;
+        : [];  // No reference form data means this is the only submit — form was pre-populated, skip fills
       fillPlan._prevStringFormData = { ...formData };
 
       if (testId && changedStringFields.length > 0) {
