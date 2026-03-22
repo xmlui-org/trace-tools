@@ -2,7 +2,6 @@
  * Distill parsed trace into essential user journey steps
  */
 
-const { parseTrace } = require('./parse-trace');
 
 /**
  * Summarize an API response for assertion generation.
@@ -113,200 +112,10 @@ function itemLabel(obj) {
   return null;
 }
 
-function distillTrace(traces) {
-  const steps = [];
-
-  // Sort traces by first event's perfTs to get chronological order
-  const sortedTraces = [...traces].sort((a, b) => {
-    const aTs = a.events[0]?.perfTs || 0;
-    const bTs = b.events[0]?.perfTs || 0;
-    return aTs - bTs;
-  });
-
-  for (const trace of sortedTraces) {
-    const step = extractStep(trace);
-    if (step) {
-      steps.push(step);
-    }
-  }
-
-  return { steps };
-}
-
-function extractStep(trace) {
-  // Find the primary interaction event
-  const interaction = trace.events.find(e => e.kind === 'interaction');
-  if (!interaction && !trace.summary.includes('Startup')) {
-    return null; // Skip traces without user interaction (message listeners, etc.)
-  }
-
-  // Handle startup specially
-  if (trace.summary.includes('Startup')) {
-    return extractStartupStep(trace);
-  }
-
-  const step = {
-    action: interaction.action,
-    target: inferTarget(trace, interaction),
-    await: extractAwaitConditions(trace)
-  };
-
-  // Extract modal events from text-format traces
-  const modals = extractModals(trace.events);
-  if (modals.length > 0) {
-    step.modals = modals;
-  }
-
-  return step;
-}
-
-function extractStartupStep(trace) {
-  const apiCalls = trace.events
-    .filter(e => e.kind === 'api:complete' && e.method && e.endpoint)
-    .map(e => ({ method: resolveMethod(e.method, e.endpoint), endpoint: e.endpoint }));
-
-  // Dedupe by method+endpoint
-  const uniqueApis = [];
-  const seen = new Set();
-  for (const api of apiCalls) {
-    const key = `${api.method} ${api.endpoint}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      uniqueApis.push(api);
-    }
-  }
-
-  const stateInits = trace.events
-    .filter(e => e.kind === 'state:changes' || e.kind === 'component:vars:init')
-    .map(e => e.stateName)
-    .filter(Boolean);
-
-  return {
-    action: 'startup',
-    await: {
-      api: uniqueApis,
-      state: [...new Set(stateInits)]
-    }
-  };
-}
-
-function inferTarget(trace, interaction) {
-  const target = {
-    component: interaction.target,
-    label: null,
-    selector: null
-  };
-
-  // Look at handler args for semantic info
-  const handlerStart = trace.events.find(e => e.kind === 'handler:start' && (e.args || e.displayName || e.itemName));
-  if (handlerStart) {
-    // Check for extracted displayName (from truncated JSON)
-    if (handlerStart.displayName) {
-      target.label = handlerStart.displayName;
-      target.selector = { role: 'treeitem', name: handlerStart.displayName };
-    }
-
-    // Check for extracted itemName
-    if (handlerStart.itemName && !target.label) {
-      target.label = handlerStart.itemName;
-    }
-
-    // Check parsed args object
-    if (handlerStart.args) {
-      const args = Array.isArray(handlerStart.args) ? handlerStart.args[0] : handlerStart.args;
-
-      // Tree node info
-      if (args?.displayName && !target.label) {
-        target.label = args.displayName;
-        target.selector = { role: 'treeitem', name: args.displayName };
-      }
-
-      // Item info (for tiles, etc.)
-      if (args?.name && !target.label) {
-        target.label = args.name;
-      }
-
-      // Path info
-      if (args?.path) {
-        target.path = args.path;
-      }
-    }
-  }
-
-  // Look at state changes to infer target
-  const stateChange = trace.events.find(e => e.kind === 'state:changes' && e.changes);
-  if (stateChange?.changes) {
-    for (const change of stateChange.changes) {
-      // selectedIds change tells us what was selected
-      const selectedMatch = change.match(/selectedIds:.*→\s*\["([^"]+)"\]/);
-      if (selectedMatch) {
-        const path = selectedMatch[1];
-        const name = path.split('/').pop();
-        if (!target.label) {
-          target.label = name;
-        }
-        target.selectedPath = path;
-      }
-    }
-  }
-
-  // For menu items, the interaction target is usually the semantic label
-  // But only if we haven't already found a better label from state changes/args
-  // and the target looks like a user-visible label (not a component type)
-  const isGenericComponentName = /^[A-Z][a-z]+[A-Z]|^(HStack|VStack|Tree|Stack|Box|Link|Text)$/.test(interaction.target);
-  if (!target.label && interaction.target && !isGenericComponentName) {
-    target.label = interaction.target;
-    // Assume it's a menu item if it's a click on a named item
-    if (interaction.action === 'click') {
-      target.selector = { role: 'menuitem', name: interaction.target };
-    }
-  }
-
-  return target;
-}
-
-function extractAwaitConditions(trace) {
-  const conditions = {};
-
-  // API calls
-  const apiCalls = trace.events
-    .filter(e => e.kind === 'api:complete' || e.kind === 'api:start')
-    .map(e => ({
-      method: e.method,
-      endpoint: e.endpoint,
-      status: e.status
-    }))
-    .filter(a => a.method);
-
-  if (apiCalls.length > 0) {
-    conditions.api = apiCalls;
-  }
-
-  // Navigation
-  const navigate = trace.events.find(e => e.kind === 'navigate');
-  if (navigate) {
-    conditions.navigate = {
-      from: navigate.from,
-      to: navigate.to
-    };
-  }
-
-  // State changes
-  const stateChanges = trace.events
-    .filter(e => e.kind === 'state:changes' && e.changes)
-    .flatMap(e => e.changes || []);
-
-  if (stateChanges.length > 0) {
-    conditions.state = stateChanges;
-  }
-
-  return Object.keys(conditions).length > 0 ? conditions : undefined;
-}
-
 /**
  * Distill raw JSON logs from window._xsLogs (captured by Playwright)
  */
-function distillJsonLogs(logs) {
+function distillTrace(logs) {
   // Build a global modifier-key timeline from all keydown/keyup interaction events.
   // This is needed because Table row clicks are captured in a separate traceId from
   // the keydown event for the modifier key (e.g. Ctrl), so we can't see the modifier
@@ -538,7 +347,7 @@ function distillJsonLogs(logs) {
       }
       // Look ahead: find ariaName entries between this step and the next
       const nextStepTs = steps[i + 1]?._firstPerfTs || Infinity;
-      if (!step.target?.ariaName) {
+      if (step.target && !step.target.ariaName) {
         for (let j = ariaIdx; j < ariaNameByTs.length && ariaNameByTs[j].ts < nextStepTs; j++) {
           step.target.ariaName = ariaNameByTs[j].ariaName;
           break;
@@ -908,7 +717,7 @@ function extractStepFromJsonLogs(trace) {
   }
 
   // Capture DataSource array snapshots for cross-step diffing.
-  // The caller (distillJsonLogs) will diff consecutive snapshots and attach
+  // The caller (distillTrace) will diff consecutive snapshots and attach
   // dataSourceChanges to steps with mutating API calls.
   const dsArrayChanges = events
     .filter(e => e.kind === 'state:changes' && e.diffJson)
@@ -974,7 +783,7 @@ function extractModals(events) {
 
 // Export
 if (typeof module !== 'undefined') {
-  module.exports = { distillTrace, distillJsonLogs, parseTrace, resolveMethod };
+  module.exports = { distillTrace, resolveMethod };
 }
 
 // CLI usage
@@ -983,15 +792,8 @@ if (require.main === module) {
   const input = fs.readFileSync(process.argv[2] || '/dev/stdin', 'utf8');
   const outputFile = process.argv[3];
 
-  let distilled;
-  // Detect JSON vs text format
-  if (input.trim().startsWith('[') || input.trim().startsWith('{')) {
-    const logs = JSON.parse(input);
-    distilled = distillJsonLogs(logs);
-  } else {
-    const parsed = parseTrace(input);
-    distilled = distillTrace(parsed);
-  }
+  const logs = JSON.parse(input);
+  const distilled = distillTrace(logs);
 
   const output = JSON.stringify(distilled, null, 2);
   if (outputFile) {

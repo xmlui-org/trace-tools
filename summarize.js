@@ -7,7 +7,7 @@
  */
 
 const fs = require('fs');
-const { distillJsonLogs } = require('./distill-trace');
+const { distillTrace } = require('./distill-trace');
 
 // Parse arguments
 let showJourney = false;
@@ -28,7 +28,7 @@ if (!inputFile) {
 
 try {
   const logs = JSON.parse(fs.readFileSync(inputFile, 'utf8'));
-  const distilled = distillJsonLogs(logs);
+  const distilled = distillTrace(logs);
 
   console.log(`\n=== Trace Summary ===`);
   console.log(`Events: ${logs.length}`);

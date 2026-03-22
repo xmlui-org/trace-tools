@@ -150,10 +150,10 @@ case "${1:-help}" in
       exit 1
     fi
     node -e "
-      const { distillJsonLogs } = require('$TRACE_TOOLS/distill-trace');
+      const { distillTrace } = require('$TRACE_TOOLS/distill-trace');
       const fs = require('fs');
       const logs = JSON.parse(fs.readFileSync('$2', 'utf8'));
-      const distilled = distillJsonLogs(logs);
+      const distilled = distillTrace(logs);
       fs.writeFileSync('$BASELINES/$3.json', JSON.stringify(distilled, null, 2));
     "
     echo "Saved baseline: $3 (distilled)"
@@ -424,10 +424,10 @@ case "${1:-help}" in
       exit 1
     fi
     node -e "
-      const { distillJsonLogs } = require('$TRACE_TOOLS/distill-trace');
+      const { distillTrace } = require('$TRACE_TOOLS/distill-trace');
       const fs = require('fs');
       const logs = JSON.parse(fs.readFileSync('$CAPTURED', 'utf8'));
-      const distilled = distillJsonLogs(logs);
+      const distilled = distillTrace(logs);
       fs.writeFileSync('$BASELINES/$2.json', JSON.stringify(distilled, null, 2));
     "
     echo "Updated baseline: $2 (distilled)"
@@ -470,10 +470,10 @@ case "${1:-help}" in
     echo "═══════════════════════════════════════════════════════════════"
     mkdir -p "$BASELINES"
     node -e "
-      const { distillJsonLogs } = require('$TRACE_TOOLS/distill-trace');
+      const { distillTrace } = require('$TRACE_TOOLS/distill-trace');
       const fs = require('fs');
       const logs = JSON.parse(fs.readFileSync('$TRACE_JSON', 'utf8'));
-      const distilled = distillJsonLogs(logs);
+      const distilled = distillTrace(logs);
       fs.writeFileSync('$BASELINES/$NAME.json', JSON.stringify(distilled, null, 2));
     "
     echo "Saved baseline (distilled): $BASELINES/$NAME.json"

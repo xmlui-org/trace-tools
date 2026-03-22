@@ -2,7 +2,6 @@
  * Generate Playwright test from distilled trace
  */
 
-const { parseTrace } = require('./parse-trace');
 const { distillTrace } = require('./distill-trace');
 
 /** Escape a string for embedding inside a JS single-quoted literal. */
@@ -1313,7 +1312,7 @@ if (typeof module !== 'undefined') {
 if (require.main === module) {
   const fs = require('fs');
   const path = require('path');
-  const { distillJsonLogs } = require('./distill-trace');
+  // distillTrace is already imported at module level
 
   const args = process.argv.slice(2);
   const browserErrors = args.includes('--browser-errors');
@@ -1339,23 +1338,17 @@ if (require.main === module) {
 
   let distilled;
 
-  // Detect input format: distilled ({ steps: [...] }), raw JSON logs ([...]), or text
-  if (input.trim().startsWith('{')) {
-    const parsed = JSON.parse(input);
-    if (parsed.steps) {
-      // Already distilled — use directly
-      distilled = parsed;
-    } else {
-      distilled = distillJsonLogs([parsed]);
-    }
-  } else if (input.trim().startsWith('[')) {
+  // Detect input format: distilled ({ steps: [...] }) or raw JSON logs ([...])
+  const parsed = JSON.parse(input);
+  if (parsed.steps) {
+    // Already distilled — use directly
+    distilled = parsed;
+  } else if (Array.isArray(parsed)) {
     // Raw JSON logs — distill
-    const logs = JSON.parse(input);
-    distilled = distillJsonLogs(logs);
-  } else {
-    // Text format - use parseTrace + distillTrace
-    const parsed = parseTrace(input);
     distilled = distillTrace(parsed);
+  } else {
+    // Single event object
+    distilled = distillTrace([parsed]);
   }
 
   // Load app-specific ignore-labels.txt from the same directory as the baseline

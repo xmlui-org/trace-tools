@@ -2,11 +2,10 @@
  * Compare two distilled traces and report differences
  */
 
-const { parseTrace } = require('./parse-trace');
-const { distillTrace, distillJsonLogs, resolveMethod } = require('./distill-trace');
+const { distillTrace, resolveMethod } = require('./distill-trace');
 
 /**
- * Distill input - handles text export, JSON logs array, or already-distilled object
+ * Distill input - handles JSON logs array or already-distilled object
  */
 function distillInput(input) {
   // Already distilled
@@ -15,25 +14,16 @@ function distillInput(input) {
   }
 
   // JSON string - parse first
-  if (typeof input === 'string' && (input.trim().startsWith('[') || input.trim().startsWith('{'))) {
-    try {
-      const parsed = JSON.parse(input);
-      if (parsed.steps) return parsed; // Already distilled
-      if (Array.isArray(parsed)) return distillJsonLogs(parsed);
-      return distillJsonLogs([parsed]);
-    } catch (e) {
-      // Fall through to text parsing
-    }
+  if (typeof input === 'string') {
+    const parsed = JSON.parse(input);
+    if (parsed.steps) return parsed;
+    if (Array.isArray(parsed)) return distillTrace(parsed);
+    return distillTrace([parsed]);
   }
 
   // JSON array (from Playwright capture)
   if (Array.isArray(input)) {
-    return distillJsonLogs(input);
-  }
-
-  // Text export format
-  if (typeof input === 'string') {
-    return distillTrace(parseTrace(input));
+    return distillTrace(input);
   }
 
   throw new Error('Unknown trace format');
@@ -421,7 +411,7 @@ function extractSemantics(input) {
   });
 
   // Extract journey steps (for --show-journey)
-  const distilled = distillJsonLogs(logs);
+  const distilled = distillTrace(logs);
   const journey = distilled.steps
     .filter(s => s.action !== 'keydown')
     .map(s => {
