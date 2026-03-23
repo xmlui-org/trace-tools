@@ -305,6 +305,18 @@ function extractSemanticsFromDistilled(distilled) {
     removed: d.removed || []
   })));
 
+  // Validation errors (form validation failures)
+  const allValidationErrors = steps.flatMap(s => (s.validationErrors || []).map(v => ({
+    form: v.form,
+    errorCount: v.errorCount,
+  })));
+
+  // Data binds (data/view correspondence)
+  const allDataBinds = steps.flatMap(s => (s.dataBinds || []).map(d => ({
+    component: d.component,
+    direction: d.rowCount > d.prevCount ? 'up' : d.rowCount < d.prevCount ? 'down' : 'same',
+  })));
+
   return {
     apis: uniqueApis,
     apiCount: allApis.length,
@@ -316,6 +328,8 @@ function extractSemanticsFromDistilled(distilled) {
     confirmationDialogs,
     valueChanges: uniqueValueChanges,
     stateDiffs: allStateDiffs,
+    validationErrors: allValidationErrors,
+    dataBinds: allDataBinds,
     appTraceShapes,
     journey
   };
@@ -723,6 +737,47 @@ function compareSemanticTraces(trace1, trace2, options = {}) {
     }
   }
 
+  // Compare validation errors (shape: count of validation failures per form)
+  const ve1 = sem1.validationErrors || [];
+  const ve2 = sem2.validationErrors || [];
+  if (ve1.length !== ve2.length) {
+    report.match = false;
+    report.differences.push({
+      type: 'validation_error_count',
+      message: `Validation failure count: expected ${ve1.length}, got ${ve2.length}`
+    });
+  } else {
+    for (let i = 0; i < ve1.length; i++) {
+      if (ve1[i].errorCount !== ve2[i].errorCount) {
+        report.match = false;
+        report.differences.push({
+          type: 'validation_error_shape',
+          message: `Validation #${i + 1} on "${ve1[i].form}": expected ${ve1[i].errorCount} errors, got ${ve2[i].errorCount}`
+        });
+      }
+    }
+  }
+
+  // Compare data binds (shape: direction of change per component)
+  const db1 = sem1.dataBinds || [];
+  const db2 = sem2.dataBinds || [];
+  if (db1.length !== db2.length) {
+    report.differences.push({
+      type: 'data_bind_count',
+      message: `Data bind event count: expected ${db1.length}, got ${db2.length} (advisory)`
+    });
+  } else {
+    for (let i = 0; i < db1.length; i++) {
+      if (db1[i].direction !== db2[i].direction) {
+        report.match = false;
+        report.differences.push({
+          type: 'data_bind_direction',
+          message: `Data bind "${db1[i].component}": expected ${db1[i].direction}, got ${db2[i].direction}`
+        });
+      }
+    }
+  }
+
   // Compare app:trace transition shapes
   const shapes1 = sem1.appTraceShapes || {};
   const shapes2 = sem2.appTraceShapes || {};
@@ -824,6 +879,24 @@ function formatSemanticReport(report, options = {}) {
       }
     } else {
       lines.push(`  State diffs: (none)`);
+    }
+    const ves = sem.validationErrors || [];
+    if (ves.length > 0) {
+      lines.push(`  Validation errors:`);
+      for (const ve of ves) {
+        lines.push(`    ${ve.form}: ${ve.errorCount} error${ve.errorCount > 1 ? 's' : ''}`);
+      }
+    } else {
+      lines.push(`  Validation errors: (none)`);
+    }
+    const dbs = sem.dataBinds || [];
+    if (dbs.length > 0) {
+      lines.push(`  Data binds:`);
+      for (const db of dbs) {
+        lines.push(`    ${db.component}: ${db.direction}`);
+      }
+    } else {
+      lines.push(`  Data binds: (none)`);
     }
     const shapes = sem.appTraceShapes || {};
     const shapeLabels = Object.keys(shapes);

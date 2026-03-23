@@ -811,6 +811,26 @@ function extractStepFromJsonLogs(trace) {
     });
   }
 
+  // Capture validation:error events — form validation failures
+  const validationErrors = events.filter(e => e.kind === 'validation:error');
+  if (validationErrors.length > 0) {
+    step.validationErrors = validationErrors.map(e => ({
+      form: e.componentLabel || 'Form',
+      errorCount: (e.errorFields || []).length,
+      errorFields: e.errorFields || [],
+    }));
+  }
+
+  // Capture data:bind events — data/view correspondence
+  const dataBinds = events.filter(e => e.kind === 'data:bind');
+  if (dataBinds.length > 0) {
+    step.dataBinds = dataBinds.map(e => ({
+      component: e.componentLabel || e.component,
+      prevCount: e.prevCount,
+      rowCount: e.rowCount,
+    }));
+  }
+
   return step;
 }
 
