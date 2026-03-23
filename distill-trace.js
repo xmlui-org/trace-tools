@@ -212,14 +212,17 @@ function distillTrace(logs) {
   }
   for (const vc of orphanedValueChanges) {
     const vcTs = vc.perfTs || vc.ts || 0;
-    // Find the interaction trace group with the closest following timestamp
+    // Find the nearest interaction trace group by time (preceding or following)
     let bestTrace = null;
-    let bestTs = Infinity;
+    let bestDist = Infinity;
     for (const [tid, tg] of traces) {
       const hasInteraction = tg.events.some(e => e.kind === 'interaction');
-      if (hasInteraction && tg.firstPerfTs >= vcTs && tg.firstPerfTs < bestTs) {
-        bestTrace = tg;
-        bestTs = tg.firstPerfTs;
+      if (hasInteraction) {
+        const dist = Math.abs(tg.firstPerfTs - vcTs);
+        if (dist < bestDist) {
+          bestTrace = tg;
+          bestDist = dist;
+        }
       }
     }
     if (bestTrace) {

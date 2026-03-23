@@ -6,7 +6,7 @@ const { distillTrace } = require('./distill-trace');
 
 /** Escape a string for embedding inside a JS single-quoted literal. */
 function esc(s) {
-  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/[\u2018\u2019]/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r');
 }
 
 function generatePlaywright(distilled, options = {}) {
