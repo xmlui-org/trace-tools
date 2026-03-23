@@ -42,6 +42,7 @@ Events emitted by `wrapComponent` and `wrapCompound` include an `ariaName` field
 | `value:change` | Yes (distiller, generator) | Value changed — emitted by wrapComponent/wrapCompound. Includes `ariaName`, `component`, `displayLabel`. |
 | `method:call` | Yes (distiller) | Component API method invoked (e.g. `dialog.open()`, `radio.setValue('first')`). Emitted at dispatch level in `mergeComponentApis`. Includes `displayLabel` with call signature. |
 | `data:bind` | Yes (comparator) | Data-bound component rendered with changed item count. Emitted by wrapComponent when a `data` prop resolves to an array with a different length. Includes `prevCount`, `rowCount`. Suppresses 0→0 on initial empty render. |
+| `validation:error` | Yes (comparator) | Form validation failed on submit. Emitted by Form component when `doSubmit` detects invalid fields. Includes `errorFields` (bindTo keys) and `errorMessages`. Enables regression assertions on validation shape (error count, which fields). |
 | `native:*` | Not yet | Native library events (click, legendselectchanged, hover, etc.) — emitted via `captureNativeEvents` in wrapComponent. Includes `ariaName`, `displayLabel`. |
 | `app:trace` | Yes (comparator) | App-level diagnostic events emitted via xsTrace. Includes structured data and timing. |
 
