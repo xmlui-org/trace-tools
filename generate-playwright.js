@@ -670,12 +670,17 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
       break;
 
     case 'click': {
-      // Skip clicks on unnamed form inputs — just focus noise
-      if (step.target?.ariaRole && !step.target?.ariaName &&
+      // Skip clicks on form inputs when followed by a fill on the same field — the fill implies focus
+      if (step.target?.ariaRole &&
           ['textbox', 'textarea', 'spinbutton'].includes(step.target.ariaRole) &&
           !step.target?.formData) {
-        lines.pop();
-        return [];
+        const allSteps = fillPlan._allSteps || [];
+        const nextStep = allSteps[stepIndex + 1];
+        if (!step.target?.ariaName ||
+            (nextStep?.action === 'fill' && nextStep?.target?.ariaName === step.target?.ariaName)) {
+          lines.pop();
+          return [];
+        }
       }
       // Skip clicks on unnamed structural roles (banner, navigation, etc.) — noise
       // Only keep if there are mutating API calls (not just coincidental GETs)
@@ -689,6 +694,18 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
       lines.push(...clickLines);
       if (clickLines._skipAwait) {
         return lines;
+      }
+      // After clicking a button, if the next step targets a textbox, wait for it to appear
+      // and stabilize (React state settlement after conditional rendering)
+      if (step.target?.ariaRole === 'button') {
+        const allSteps = fillPlan._allSteps || [];
+        const nextStep = allSteps[stepIndex + 1];
+        if (nextStep && (nextStep.action === 'fill' || nextStep.action === 'click') &&
+            nextStep.target?.ariaRole === 'textbox' && nextStep.target?.ariaName &&
+            !step.await?.api?.length) {
+          lines.push(`${indent}await page.getByRole('textbox', { name: '${esc(nextStep.target.ariaName)}' }).waitFor();`);
+          lines.push(`${indent}await page.waitForTimeout(300);`);
+        }
       }
       break;
     }
