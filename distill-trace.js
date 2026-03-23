@@ -730,6 +730,25 @@ function extractStepFromJsonLogs(trace) {
     }
   }
 
+  // Capture state diffs for .xs globals and other non-DataSource state changes.
+  // These are the mutations that regression tests should assert on.
+  const stateDiffs = events
+    .filter(e => e.kind === 'state:changes' && e.diffJson)
+    .flatMap(e => e.diffJson)
+    .filter(d => d.path && !d.path.startsWith('DataSource:') && Array.isArray(d.after));
+  if (stateDiffs.length > 0) {
+    step.stateDiffs = stateDiffs.map(d => {
+      const diff = { path: d.path, before: (d.before || []).length, after: d.after.length };
+      const prevLabels = (d.before || []).map(itemLabel).filter(Boolean);
+      const afterLabels = d.after.map(itemLabel).filter(Boolean);
+      const added = afterLabels.filter(l => !prevLabels.includes(l));
+      const removed = prevLabels.filter(l => !afterLabels.includes(l));
+      if (added.length > 0) diff.added = added;
+      if (removed.length > 0) diff.removed = removed;
+      return diff;
+    });
+  }
+
   return step;
 }
 

@@ -296,6 +296,15 @@ function extractSemanticsFromDistilled(distilled) {
     appTraceShapes[label] = shape;
   }
 
+  // State diffs (.xs global mutations)
+  const allStateDiffs = steps.flatMap(s => (s.stateDiffs || []).map(d => ({
+    path: d.path,
+    before: d.before,
+    after: d.after,
+    added: d.added || [],
+    removed: d.removed || []
+  })));
+
   return {
     apis: uniqueApis,
     apiCount: allApis.length,
@@ -306,6 +315,7 @@ function extractSemanticsFromDistilled(distilled) {
     contextMenus: [],
     confirmationDialogs,
     valueChanges: uniqueValueChanges,
+    stateDiffs: allStateDiffs,
     appTraceShapes,
     journey
   };
@@ -653,6 +663,54 @@ function compareSemanticTraces(trace1, trace2, options = {}) {
     });
   }
 
+  // Compare state diffs (.xs global mutations)
+  const sd1 = sem1.stateDiffs || [];
+  const sd2 = sem2.stateDiffs || [];
+
+  if (sd1.length > 0 || sd2.length > 0) {
+    // Match by path — compare before/after counts and added/removed items
+    const paths1 = new Map(sd1.map(d => [d.path, d]));
+    const paths2 = new Map(sd2.map(d => [d.path, d]));
+
+    for (const [path, d1] of paths1) {
+      const d2 = paths2.get(path);
+      if (!d2) {
+        report.match = false;
+        report.differences.push({
+          type: 'state_diff_missing',
+          message: `State change "${path}" (${d1.before} → ${d1.after}) in before but not after`
+        });
+        continue;
+      }
+      if (d1.after !== d2.after) {
+        report.match = false;
+        report.differences.push({
+          type: 'state_diff_count',
+          message: `State "${path}" item count: expected ${d1.after}, got ${d2.after}`
+        });
+      }
+      const missingAdded = (d1.added || []).filter(a => !(d2.added || []).includes(a));
+      const extraAdded = (d2.added || []).filter(a => !(d1.added || []).includes(a));
+      if (missingAdded.length > 0 || extraAdded.length > 0) {
+        report.match = false;
+        report.differences.push({
+          type: 'state_diff_items',
+          message: `State "${path}" items differ: expected +[${d1.added?.join(', ')}], got +[${d2.added?.join(', ')}]`
+        });
+      }
+    }
+
+    for (const [path, d2] of paths2) {
+      if (!paths1.has(path)) {
+        report.match = false;
+        report.differences.push({
+          type: 'state_diff_extra',
+          message: `State change "${path}" (${d2.before} → ${d2.after}) in after but not before`
+        });
+      }
+    }
+  }
+
   // Compare app:trace transition shapes
   const shapes1 = sem1.appTraceShapes || {};
   const shapes2 = sem2.appTraceShapes || {};
@@ -744,6 +802,17 @@ function formatSemanticReport(report, options = {}) {
     lines.push(`  Context menus: ${sem.contextMenus.join(', ')}`);
     lines.push(`  Confirmation dialogs: ${(sem.confirmationDialogs || []).length > 0 ? sem.confirmationDialogs.map(d => `"${d.title}"→${d.outcome}`).join(', ') : '(none)'}`);
     lines.push(`  Value changes: ${(sem.valueChanges || []).length > 0 ? sem.valueChanges.join(', ') : '(none)'}`);
+    const sds = sem.stateDiffs || [];
+    if (sds.length > 0) {
+      lines.push(`  State diffs:`);
+      for (const sd of sds) {
+        const items = sd.added?.length ? ` +${sd.added.join(', ')}` : '';
+        const removed = sd.removed?.length ? ` -${sd.removed.join(', ')}` : '';
+        lines.push(`    ${sd.path}: ${sd.before} → ${sd.after}${items}${removed}`);
+      }
+    } else {
+      lines.push(`  State diffs: (none)`);
+    }
     const shapes = sem.appTraceShapes || {};
     const shapeLabels = Object.keys(shapes);
     if (shapeLabels.length > 0) {
