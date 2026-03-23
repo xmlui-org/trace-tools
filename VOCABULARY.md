@@ -40,6 +40,8 @@ Events emitted by `wrapComponent` and `wrapCompound` include an `ariaName` field
 | `selection:change` | Not yet | Table/Tree row selection changed — emits `selectedItems` |
 | `focus:change` | Yes (distiller) | Tab switch, Accordion expand, NavGroup toggle; also gotFocus/lostFocus from wrapComponent |
 | `value:change` | Yes (distiller, generator) | Value changed — emitted by wrapComponent/wrapCompound. Includes `ariaName`, `component`, `displayLabel`. |
+| `method:call` | Yes (distiller) | Component API method invoked (e.g. `dialog.open()`, `radio.setValue('first')`). Emitted at dispatch level in `mergeComponentApis`. Includes `displayLabel` with call signature. |
+| `data:bind` | Yes (comparator) | Data-bound component rendered with changed item count. Emitted by wrapComponent when a `data` prop resolves to an array with a different length. Includes `prevCount`, `rowCount`. Suppresses 0→0 on initial empty render. |
 | `native:*` | Not yet | Native library events (click, legendselectchanged, hover, etc.) — emitted via `captureNativeEvents` in wrapComponent. Includes `ariaName`, `displayLabel`. |
 | `app:trace` | Yes (comparator) | App-level diagnostic events emitted via xsTrace. Includes structured data and timing. |
 
@@ -47,7 +49,7 @@ Events emitted by `wrapComponent` and `wrapCompound` include an `ariaName` field
 
 | Kind | Consumed by trace-tools? | Notes |
 |------|-------------------------|-------|
-| `state:changes` | Yes (distiller) | State diffs — used for DataSource assertions and formData |
+| `state:changes` | Yes (distiller, comparator) | State diffs — used for DataSource assertions, formData, and `.xs` global mutation tracking. `diffJson` contains before/after arrays for array diffs. |
 | `state:part:changed` | No | Single state property change |
 | `state:batch:changed` | No | Batched state property changes |
 | `component:vars:init` | Yes (distiller) | Component variable initialization |
@@ -61,10 +63,10 @@ From `inspectorUtils.ts:splicePreservingInteractions()`:
 interaction, navigate, api:start, api:complete, api:error,
 handler:start, handler:complete, handler:error,
 modal:show, modal:confirm, modal:cancel,
-toast, submenu:open, selection:change, focus:change
+toast, submenu:open, selection:change, focus:change, method:call
 ```
 
-Note: `value:change` and `native:*` events from wrapComponent are behavioral but not yet in the preserved set. They survive in practice because they're low-frequency relative to rendering events.
+Note: `value:change`, `data:bind`, and `native:*` events from wrapComponent are behavioral but not yet in the preserved set. They survive in practice because they're low-frequency relative to rendering events.
 
 ## Consumed set (trace-tools)
 
@@ -74,7 +76,7 @@ From `distill-trace.js`, `generate-playwright.js`, `compare-traces.js`:
 interaction, navigate, api:start, api:complete, api:error,
 handler:start, modal:show, modal:confirm, modal:cancel,
 toast, submenu:open, state:changes, component:vars:init,
-value:change, app:trace
+value:change, method:call, data:bind, app:trace
 ```
 
 ## Self-describing inspector
