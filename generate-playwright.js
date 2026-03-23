@@ -156,6 +156,10 @@ function generatePlaywright(distilled, options = {}) {
             // wait for them to be enabled, not just present in the DOM.
             const inList = nt.component === 'List' || nt.component === 'Table';
             stepLines.push(`  await expect(page.getByRole('button', { name: '${nt.ariaName}', exact: true })${inList ? '.first()' : ''}).toBeEnabled({ timeout: 15000 });`);
+          } else if (nt.ariaRole === 'checkbox' && nt.ariaName?.startsWith('Select ')) {
+            // Table row selection checkboxes are hidden until hover — wait for the row
+            const rowName = esc(nt.ariaName.replace('Select ', ''));
+            stepLines.push(`  await ${rowLocator(rowName)}.waitFor();`);
           } else {
             stepLines.push(`  await page.getByRole('${nt.ariaRole}', { name: '${nt.ariaName}', exact: true }).waitFor();`);
           }
