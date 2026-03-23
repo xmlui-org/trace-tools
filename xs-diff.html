@@ -31,11 +31,11 @@
         --color-interaction-bg: #eef2ff;
 
         /* Font sizes */
-        --font-xs: 8px;
-        --font-sm: 10px;
-        --font-md: 11px;
-        --font-base: 12px;
-        --font-lg: 13px;
+        --font-xs: 10px;
+        --font-sm: 12px;
+        --font-md: 13px;
+        --font-base: 14px;
+        --font-lg: 15px;
 
         /* Spacing */
         --space-1: 4px;
@@ -720,7 +720,6 @@
   </head>
   <body>
     <div class="toolbar">
-      <span style="display: flex; align-items: center; gap: var(--space-2);"><label>View:</label><label><input type="radio" name="viewMode" id="viewPretty" checked /> pretty</label><label><input type="radio" name="viewMode" id="viewRaw" /> raw</label></span>
       <input type="text" id="searchInput" placeholder="Search..." style="width: 200px;" />
       <button id="searchPrev" title="Previous match">▲</button>
       <button id="searchNext" title="Next match">▼</button>
@@ -1260,22 +1259,12 @@
 
       // Fetch and cache source file contents
       const sourceCache = new Map();
-      // Resolve relative paths against the parent window's origin (app root),
-      // not the iframe's directory (xmlui/). Used by fetchSourceRange and openFileModal.
-      function resolveAppUrl(filePath) {
-        if (filePath.includes("://")) return filePath;
-        const parentOrigin = (window.parent && window.parent !== window)
-          ? window.parent.location.origin
-          : window.location.origin;
-        return parentOrigin + "/" + filePath.replace(/^\//, "");
-      }
-
       async function fetchSourceRange(filePath, startChar, endChar) {
         if (!filePath) return null;
         try {
           let content = sourceCache.get(filePath);
           if (!content) {
-            const resp = await fetch(resolveAppUrl(filePath));
+            const resp = await fetch(filePath);
             if (!resp.ok) return null;
             content = await resp.text();
             // Validate content isn't HTML (SPA fallback returns index.html for missing files)
@@ -1480,28 +1469,12 @@
                 }
 
                 if (outputSections.length === 0) {
-                  // Fallback: use character range if available
-                  const startChar = parseInt(detailsEl.dataset.start, 10);
-                  const endChar = parseInt(detailsEl.dataset.end, 10);
-                  const xmluiFallback = await fetchSourceRange(filePath, 0, 999999);
-                  if (xmluiFallback && !isNaN(startChar) && !isNaN(endChar)) {
-                    const snippet = xmluiFallback.substring(startChar, endChar);
-                    const lines = snippet.split("\n");
-                    const preSnippet = xmluiFallback.substring(0, startChar);
-                    const startLine = preSnippet.split("\n").length;
-                    const formatted = lines.map((line, i) => {
-                      const lineNum = String(startLine + i).padStart(4);
-                      return `  ${lineNum}: ${line}`;
-                    }).join("\n");
-                    outputSections.push(`// ${filePath.split("/").pop()}\n${formatted}`);
-                  }
-                }
-                if (outputSections.length > 0) {
+                  // No useful content found
+                  codeEl.textContent = "// Source not found";
+                } else {
                   codeEl.innerHTML = outputSections.join("\n")
                     .replace(/</g, "&lt;")
                     .replace(/^→ (.*)$/gm, '<span class="highlight-line">→ $1</span>');
-                } else {
-                  codeEl.textContent = "// Source not found";
                 }
               } catch (err) {
                 codeEl.textContent = "Error loading source: " + err.message;
@@ -1813,7 +1786,7 @@
        */
       /**
        * Classify handler code into a category for display.
-       * Shared by renderTraceGroupPretty and renderTraceRaw.
+       * Shared by renderTraceGroupPretty and export functions.
        */
       function parseHandlerCode(code) {
         const trimmed = code.trim();
@@ -1843,7 +1816,7 @@
 
       /**
        * Classify a diff item into a category for rendering.
-       * Shared by pretty and raw views to avoid duplicated if/else chains.
+       * Shared by pretty view and export functions to avoid duplicated if/else chains.
        */
       function classifyDiffItem(d) {
         const before = d.before;
@@ -2040,8 +2013,6 @@
         if (entry.componentLabel?.startsWith("vite-") || entry.uid?.startsWith("vite-")) return false;
         // Hide XMLUI Inspector interactions (inspector UI itself)
         if (entry.componentLabel === "XMLUI Inspector" || (entry.componentLabel && entry.componentLabel.includes("Inspector"))) return false;
-        if (entry.ariaName === "Inspector" || entry.detail?.ariaName === "Inspector") return false;
-        if (entry.detail?.targetText === "Inspector" || entry.detail?.text?.includes("Inspector")) return false;
         // Hide inspector activation events
         const code = entry.code || entry.arrow || entry.handlerCode || "";
         if (code.includes("inspectorDialog.open")) return false;
@@ -2208,11 +2179,11 @@
 
       /**
        * Determine whether a trace item has enough content to display.
-       * Shared by groupSimilarTraces, renderPrettyView, and renderRawView.
+       * Shared by groupSimilarTraces and renderPrettyView.
        */
       function shouldIncludeTrace(item) {
         const isStartup = item.traceId && item.traceId.startsWith("startup-");
-        const hasContent = item.summary.changeCount > 0 || item.summary.hasError || item.summary.startCount > 0 || item.summary.behavioralEventCount > 0 || item.summary.interactionCount > 0;
+        const hasContent = item.summary.changeCount > 0 || item.summary.hasError || item.summary.startCount > 0 || item.summary.behavioralEventCount > 0;
         return hasContent || isStartup;
       }
 
@@ -2251,13 +2222,10 @@
             traceEntries.find((e) => e.kind === "native:click" || e.kind === "native:dblclick") ||
             traceEntries.find((e) => e.kind?.startsWith("native:"));
           if (interaction) {
-            const type = interaction.componentType || "";
-            const rawLabel = interaction.componentLabel || interaction.uid || "Unknown";
-            // Show both component type and label when label is an aria-label (differs from type)
-            const label = type && rawLabel !== type ? `${type} «${rawLabel}»` : rawLabel;
+            const label = interaction.componentLabel || interaction.uid || "Unknown";
             const action = interaction.interaction || interaction.eventName || "";
             const detailTextContent = interaction.detail?.text;
-            const hasOnlyTag = /^[a-z]+$/.test(rawLabel);
+            const hasOnlyTag = /^[a-z]+$/.test(label);
             const contextText = hasOnlyTag && detailTextContent && detailTextContent.length < 40 ? ` "${detailTextContent}"` : "";
             componentText = action ? `${label}${contextText} ${action}` : label + contextText;
             // If there's also a native event with a displayLabel, append it
@@ -2478,13 +2446,10 @@
         const sourceFile = firstStart ? resolveFileLabel(firstStart.ownerFileId) : null;
         const handlerCode = firstStart?.handlerCode || null;
 
-        const interactionCount = traceEntries.filter((e) => e.kind === "interaction").length;
-
         return {
           componentText: componentText || "Unknown trace",
           changeCount,
           behavioralEventCount,
-          interactionCount,
           hasError: !!error,
           multipleStarts: handlerNames.length > 1,
           handlerNames,
@@ -3918,38 +3883,14 @@
                 // Native events: plain source expander (event isn't declared in XMLUI markup)
                 bodyHtml += `<details class="source-loader" data-file="${evt.meta.resolvedFile}" data-start="${startChar}" data-end="${endChar}">`;
               } else {
-                // value:change, focus:change, etc.: search for the handler attribute in source, with char range fallback
+                // value:change, focus:change, etc.: search for the handler attribute in source
                 const eventName = e.eventName || "";
                 const componentLabel = e.componentLabel || "";
-                bodyHtml += `<details class="source-loader" data-file="${evt.meta.resolvedFile}" data-start="${startChar}" data-end="${endChar}" data-handler-name="${eventName}" data-component-label="${componentLabel}" data-search-handler="true">`;
+                bodyHtml += `<details class="source-loader" data-file="${evt.meta.resolvedFile}" data-handler-name="${eventName}" data-component-label="${componentLabel}" data-search-handler="true">`;
               }
               bodyHtml += `<summary>XMLUI Source</summary>`;
               bodyHtml += `<pre class="source-code">Click to load...</pre>`;
               bodyHtml += `</details>`;
-            }
-          }
-
-          // Render array diff for value:change events with prevValue/newValue (e.g. ChangeListener)
-          if (e.kind === "value:change" && e.prevValue !== undefined && e.newValue !== undefined) {
-            if (Array.isArray(e.newValue)) {
-              const prev = e.prevValue || [];
-              const next = e.newValue;
-              const prevNames = prev.map(i => i.name || i.id || JSON.stringify(i).slice(0, 40));
-              const nextNames = next.map(i => i.name || i.id || JSON.stringify(i).slice(0, 40));
-              const added = nextNames.filter(n => !prevNames.includes(n));
-              const removed = prevNames.filter(n => !nextNames.includes(n));
-              let diffHtml = `<div class="trace-meta" style="margin-left: var(--space-4, 16px); margin-top: 4px;">`;
-              diffHtml += `<strong>${prev.length} \u2192 ${next.length} items</strong>`;
-              if (added.length > 0) {
-                diffHtml += `<div style="color: var(--color-success, green);">+${added.length} added</div>`;
-                added.forEach(n => { diffHtml += `<div style="color: var(--color-success, green); margin-left: var(--space-4, 16px);">+ ${n}</div>`; });
-              }
-              if (removed.length > 0) {
-                diffHtml += `<div style="color: var(--color-error, red);">-${removed.length} removed</div>`;
-                removed.forEach(n => { diffHtml += `<div style="color: var(--color-error, red); margin-left: var(--space-4, 16px);">- ${n}</div>`; });
-              }
-              diffHtml += `</div>`;
-              bodyHtml += diffHtml;
             }
           }
 
@@ -4146,349 +4087,6 @@
 
         return html;
       }
-
-      // =============================================================================
-      // RAW VIEW RENDERING
-      // =============================================================================
-
-      function renderRawView(processed) {
-        const lines = [];
-
-        lines.push("=== XMLUI Inspector Export ===");
-        lines.push(`Total events: ${processed.totalEvents}`);
-        lines.push("");
-
-        let traceIndex = 0;
-        processed.timelineItems.forEach((item) => {
-          if (item.type === "trace") {
-            if (!shouldIncludeTrace(item)) return;
-            traceIndex++;
-            lines.push(...renderTraceRaw(item, traceIndex));
-            lines.push("");
-          }
-        });
-
-        const standaloneInteractions = processed.timelineItems.filter((item) => item.type === "interaction");
-        if (standaloneInteractions.length) {
-          lines.push("--- Standalone interactions ---");
-          standaloneInteractions.forEach((item) => {
-            lines.push(`    [interaction] ${item.componentText} ${item.entry.interaction}`);
-          });
-          lines.push("");
-        }
-
-        if (processed.groupedDataSources.length) {
-          lines.push("--- DataSource updates (async) ---");
-          processed.groupedDataSources.forEach((group) => {
-            lines.push(`    DataSource "${group.name}"${group.instanceId ? ` (instance: ${group.instanceId})` : ""} updated ${group.updateCount}x${group.isRedundant ? " [REDUNDANT]" : ""}`);
-            group.entries.forEach((item, i) => {
-              const e = item.entry;
-              lines.push(`        Update ${i + 1} @ ${item.relTime}`);
-              if (e.diffJson) {
-                e.diffJson.forEach((d) => {
-                  const classified = classifyDiffItem(d);
-                  switch (classified.type) {
-                    case "keyedArrayDiff": {
-                      const summary = summarizeArrayDiff(classified.before, classified.after);
-                      lines.push(`            ${d.path}:`);
-                      summary.split("\n").forEach((line) => lines.push(`                ${line}`));
-                      break;
-                    }
-                    case "keyedArrayInit":
-                      lines.push(`            ${d.path}: initialized with ${classified.after.length} items`);
-                      break;
-                    case "keyedArrayCleared":
-                      lines.push(`            ${d.path}: ${classified.before.length} items → cleared`);
-                      break;
-                    case "objectDiff": {
-                      const allKeys = new Set([...Object.keys(classified.before), ...Object.keys(classified.after)]);
-                      const changedKeys = [];
-                      allKeys.forEach((key) => {
-                        if (JSON.stringify(classified.before[key]) !== JSON.stringify(classified.after[key])) changedKeys.push(key);
-                      });
-                      if (changedKeys.length === 0) {
-                        lines.push(`            ${d.path}: (no visible change)`);
-                      } else {
-                        lines.push(`            ${d.path}:`);
-                        changedKeys.forEach((key) => {
-                          const bvStr = classified.before[key] === undefined ? "undefined" : JSON.stringify(classified.before[key])?.slice(0, 60) || "null";
-                          const avStr = classified.after[key] === undefined ? "undefined" : JSON.stringify(classified.after[key])?.slice(0, 60) || "null";
-                          lines.push(`                ${key}: ${bvStr} → ${avStr}`);
-                        });
-                      }
-                      break;
-                    }
-                    default:
-                      lines.push(`            ${d.path}: ${JSON.stringify(d.before)?.slice(0, 80) || "undefined"} → ${JSON.stringify(d.after)?.slice(0, 80) || "undefined"}`);
-                  }
-                });
-              }
-            });
-          });
-          lines.push("");
-        }
-
-        if (processed.otherOrphans.length) {
-          lines.push("--- Other events (no trace) ---");
-          processed.otherOrphans.forEach((orphan) => {
-            lines.push(`    [${orphan.entry.kind}] ${orphan.entry.eventName || ""} (perfTs: ${orphan.entry.perfTs?.toFixed(1) || "?"})`);
-          });
-          lines.push("");
-        }
-
-        // Notes section disabled for now - collision detection kept in code but not rendered
-        // if (processed.collisions.length) {
-        //   lines.push("--- Notes ---");
-        //   lines.push("1. DataSource identity reused across components. These are independent instances that share the same id/uid.");
-        //   processed.collisions.forEach((c) => {
-        //     lines.push(`    id/uid: ${c.key}`);
-        //     c.entries.forEach((item) => {
-        //       const parts = item.meta.parts.filter((p) => !p.startsWith("perfTs"));
-        //       if (item.meta.hasSource) parts.push(`source: ${item.meta.sourceRange}`);
-        //       lines.push(`        - ${parts.join(", ")}`);
-        //     });
-        //   });
-        //   lines.push("");
-        // }
-
-        if (processed.sourceFiles.length) {
-          lines.push("--- Source files (index → path) ---");
-          processed.sourceFiles.forEach((file, idx) => lines.push(`    [${idx}] ${file}`));
-        }
-
-        return lines.join("\n");
-      }
-
-      function renderTraceRaw(trace, index) {
-        const { summary, events, dedupedCount, traceId } = trace;
-        const lines = [];
-
-        lines.push(`--- Trace ${index}: ${summary.componentText}${summary.totalDuration !== null ? ` (${summary.totalDuration.toFixed(0)}ms)` : ""} ---`);
-        lines.push(`    traceId: ${traceId}`);
-        if (summary.timelineBreakdown.length > 0 && summary.totalDuration) {
-          lines.push(`    timeline:`);
-          const sorted = summary.timelineBreakdown.slice().sort((a, b) => a.order - b.order);
-          sorted.forEach(item => {
-            lines.push(`      ${item.phase.padEnd(40)} ${String(item.duration.toFixed(0) + "ms").padStart(8)}`);
-          });
-          lines.push(`      ${"total".padEnd(40)} ${String(summary.totalDuration.toFixed(0) + "ms").padStart(8)}`);
-        } else if (summary.totalDuration !== null) {
-          lines.push(`    duration: ${summary.totalDuration.toFixed(0)}ms`);
-        }
-
-        events.forEach((evt) => {
-          const e = evt.entry;
-          // Strip HTML tags from meta parts for raw text output
-          const metaParts = evt.meta.parts.map(stripHtml);
-
-          if (e.kind === "api:start" || e.kind === "api:complete" || e.kind === "api:error") {
-            const method = normalizeMethod(e.method);
-            const url = normalizeUrl(e.url);
-            const errorSuffix = e.kind === "api:error" && e.error ? ` - ${e.error.message || e.error}` : "";
-            const statusSuffix = e.kind === "api:complete" && e.status ? ` [${e.status}]` : "";
-            const durationSuffix = e.kind === "api:complete" && typeof e._apiDuration === "number" ? ` (${e._apiDuration.toFixed(1)}ms)` : "";
-            const requestIdSuffix = e._requestId ? ` [${e._requestId}]` : "";
-            const dedupCount = e._dedupCount || 1;
-            const dedupSuffix = dedupCount > 1 ? ` ×${dedupCount}` : "";
-            lines.push(`    [${e.kind}]${statusSuffix}${durationSuffix}${dedupSuffix} ${method} ${url}${errorSuffix}${requestIdSuffix}${metaParts.length ? ` (${metaParts.join(" | ")})` : ""}`);
-            // Show body expression for api:start
-            if (e.bodyExpression && e.kind === "api:start") {
-              lines.push(`      body: ${e.bodyExpression}`);
-            }
-            // Show request body for api:start
-            if (e.body && e.kind === "api:start") {
-              const bodyStr = typeof e.body === "string" ? e.body : JSON.stringify(e.body, null, 2);
-              const truncatedBody = bodyStr.length > 200 ? bodyStr.substring(0, 200) + "..." : bodyStr;
-              lines.push(`      request: ${truncatedBody}`);
-            }
-            // Show response for api:complete
-            if (e.kind === "api:complete" && e.result !== undefined) {
-              const resultStr = typeof e.result === "string" ? e.result : JSON.stringify(e.result, null, 2);
-              const truncatedResult = resultStr.length > 200 ? resultStr.substring(0, 200) + "..." : resultStr;
-              lines.push(`      response: ${truncatedResult}`);
-            }
-            return;
-          }
-          if (e.kind === "app:trace") {
-            const durationStr = typeof e.duration === "number" ? ` (${e.duration.toFixed(1)}ms)` : "";
-            const dataStr = e.data ? " " + Object.entries(e.data).map(([k,v]) => `${k}=${JSON.stringify(v)}`).join(" | ") : "";
-            lines.push(`    [app:trace]${durationStr} ${e.label || "trace"}${dataStr}${metaParts.length ? ` (${metaParts.join(" | ")})` : ""}`);
-            return;
-          }
-          if (e.kind === "error:boundary") {
-            lines.push(`    [${e.kind}] ${e.error || "Unknown error"}${e.location ? ` in ${e.location}` : ""}${metaParts.length ? ` (${metaParts.join(" | ")})` : ""}`);
-            return;
-          }
-          if (e.kind === "handler:error") {
-            const fileLabel = e.ownerFileId !== undefined ? resolveFileLabel(e.ownerFileId) : null;
-            const fileInfo = fileLabel ? ` in ${fileLabel}` : "";
-            lines.push(`    [${e.kind}] ${e.eventName || ""} - ${e.error?.message || "Unknown error"}${fileInfo}${metaParts.length ? ` (${metaParts.join(" | ")})` : ""}`);
-            return;
-          }
-          if (e.kind === "navigate") {
-            lines.push(`    [navigate] ${e.from || "/"} → ${e.to || "?"}${metaParts.length ? ` (${metaParts.join(" | ")})` : ""}`);
-            return;
-          }
-          if (e.kind === "modal:show" || e.kind === "modal:confirm" || e.kind === "modal:cancel") {
-            const title = e.title ? ` "${e.title}"` : "";
-            lines.push(`    [${e.kind}]${title}${metaParts.length ? ` (${metaParts.join(" | ")})` : ""}`);
-            return;
-          }
-          if (e.kind === "handler:start" || e.kind === "handler:complete") {
-            const handlerDedupCount = e._dedupCount || 1;
-            const handlerDedupSuffix = handlerDedupCount > 1 ? ` ×${handlerDedupCount}` : "";
-            lines.push(`    [${e.kind}]${handlerDedupSuffix}${e.eventName ? ` ${e.eventName}` : ""}${evt.label ? ` ${evt.label}` : ""}${metaParts.length ? ` (${metaParts.join(" | ")})` : ""}`);
-            // Show eventArgs if available
-            if (e.kind === "handler:start" && e.eventArgs && e.eventArgs.length > 0) {
-              try {
-                const cleanedArgs = cleanEventArgs(e.eventArgs);
-                const argsStr = safeStringify(cleanedArgs);
-                if (argsStr && argsStr.length < 1000) {
-                  lines.push(`      args: ${argsStr.length < 100 ? argsStr : argsStr.substring(0, 100) + "..."}`);
-                } else {
-                  lines.push(`      args: [${e.eventArgs.length} items]`);
-                }
-              } catch (err) {
-                lines.push(`      args: [${e.eventArgs.length} items, failed to serialize]`);
-              }
-            }
-            // Show handler code if available
-            if (e.handlerCode) {
-              const parsed = parseHandlerCode(e.handlerCode);
-              switch (parsed.type) {
-                case "apiCall":
-                  lines.push(`      APICall: ${parsed.method} ${parsed.url}`);
-                  break;
-                case "xsFunc":
-                  lines.push(`      .xs: ${parsed.funcName}()`);
-                  break;
-                case "windowFunc":
-                  lines.push(`      window: ${parsed.funcName}()`);
-                  break;
-                case "simpleFunc":
-                  lines.push(`      calls: ${parsed.funcName}()`);
-                  break;
-                case "arrow":
-                  lines.push(`      arrow: ${parsed.firstLine.length < 60 ? parsed.firstLine : parsed.firstLine.substring(0, 60) + "..."}`);
-                  break;
-                case "inline":
-                  if (parsed.innerCode.length < 60) {
-                    lines.push(`      inline: ${parsed.innerCode}`);
-                  } else {
-                    lines.push(`      inline: ${parsed.innerCode.substring(0, 60)}...`);
-                  }
-                  break;
-                default:
-                  if (parsed.code.length < 80) {
-                    lines.push(`      code: ${parsed.code}`);
-                  } else {
-                    lines.push(`      code: ${parsed.code.substring(0, 80)}...`);
-                  }
-              }
-            }
-            return;
-          }
-
-          const bootstrapTag = e._bootstrap ? " [bootstrap]" : "";
-          const pollingCount = e._pollingCount || 1;
-          const pollingSuffix = pollingCount > 1 ? ` ×${pollingCount}` : "";
-          lines.push(`    [${e.kind}]${pollingSuffix}${e.eventName ? ` ${e.eventName}` : ""}${evt.label ? ` ${evt.label}` : ""}${bootstrapTag}${metaParts.length ? ` (${metaParts.join(" | ")})` : ""}`);
-
-          // Show polling ranges if present
-          if (e._pollingRanges && e._pollingRanges.length > 0) {
-            e._pollingRanges.forEach(r => lines.push(`        ${r}`));
-          }
-
-          if (evt.meta.hasSource) lines.push(`        source ${evt.meta.sourceRange}`);
-
-          // Show component:vars diffs inline with array summaries
-          if ((e.kind === "component:vars:init" || e.kind === "component:vars:change") && e.diff) {
-            const dedupCount = e._dedupCount || 1;
-            if (dedupCount > 1) {
-              lines.push(`        (×${dedupCount} identical instances)`);
-            }
-            // Show file if available
-            if (e.file) {
-              lines.push(`        file: ${e.file}`);
-            }
-            // Summarize each var change
-            e.diff.forEach((d) => {
-              const varName = d.path || "value";
-              const classified = classifyDiffItem(d);
-              switch (classified.type) {
-                case "keyedArrayDiff": {
-                  const summary = summarizeArrayDiff(classified.before, classified.after);
-                  lines.push(`        ${varName}:`);
-                  summary.split("\n").forEach((line) => lines.push(`            ${line}`));
-                  break;
-                }
-                case "keyedArrayInit":
-                  lines.push(`        ${varName}: initialized with ${classified.after.length} items`);
-                  classified.after.slice(0, 5).forEach((item) => lines.push(`            • ${getItemLabel(item)}`));
-                  if (classified.after.length > 5) lines.push(`            … and ${classified.after.length - 5} more`);
-                  break;
-                case "noop":
-                  break;
-                default: {
-                  const beforeStr = d.before === undefined ? "undefined" : JSON.stringify(d.before);
-                  const afterStr = d.after === undefined ? "undefined" : JSON.stringify(d.after);
-                  const maxLen = 80;
-                  const beforeDisplay = beforeStr.length > maxLen ? beforeStr.slice(0, maxLen) + "..." : beforeStr;
-                  const afterDisplay = afterStr.length > maxLen ? afterStr.slice(0, maxLen) + "..." : afterStr;
-                  lines.push(`        ${varName}: ${beforeDisplay} → ${afterDisplay}`);
-                }
-              }
-            });
-          }
-
-          if (e.kind === "state:changes" && e.diffJson) {
-            e.diffJson.forEach((d) => {
-              const classified = classifyDiffItem(d);
-              switch (classified.type) {
-                case "keyedArrayDiff": {
-                  const summary = summarizeArrayDiff(classified.before, classified.after);
-                  lines.push(`        ${d.path}:`);
-                  summary.split("\n").forEach((line) => lines.push(`            ${line}`));
-                  break;
-                }
-                case "keyedArrayInit":
-                  lines.push(`        ${d.path}: initialized with ${classified.after.length} items`);
-                  classified.after.slice(0, 5).forEach((item) => lines.push(`            • ${getItemLabel(item)}`));
-                  if (classified.after.length > 5) lines.push(`            … and ${classified.after.length - 5} more`);
-                  break;
-                case "keyedArrayCleared":
-                  lines.push(`        ${d.path}: ${classified.before.length} items → cleared`);
-                  break;
-                case "objectDiff": {
-                  const allKeys = new Set([...Object.keys(classified.before), ...Object.keys(classified.after)]);
-                  const changedKeys = [];
-                  allKeys.forEach((key) => {
-                    if (JSON.stringify(classified.before[key]) !== JSON.stringify(classified.after[key])) changedKeys.push(key);
-                  });
-                  if (changedKeys.length === 0) {
-                    lines.push(`        ${d.path}: (no visible change)`);
-                  } else {
-                    lines.push(`        ${d.path}:`);
-                    changedKeys.forEach((key) => {
-                      const bvStr = classified.before[key] === undefined ? "undefined" : JSON.stringify(classified.before[key])?.slice(0, 60) || "null";
-                      const avStr = classified.after[key] === undefined ? "undefined" : JSON.stringify(classified.after[key])?.slice(0, 60) || "null";
-                      lines.push(`            ${key}: ${bvStr} → ${avStr}`);
-                    });
-                  }
-                  break;
-                }
-                default:
-                  lines.push(`        ${d.path}: ${JSON.stringify(d.before)?.slice(0, 80) || "undefined"} → ${JSON.stringify(d.after)?.slice(0, 80) || "undefined"}`);
-              }
-            });
-          }
-        });
-
-        if (dedupedCount > 0) lines.push(`    [dedupe] ${dedupedCount} repeated state change${dedupedCount > 1 ? "s" : ""} removed`);
-
-        return lines;
-      }
-
       // =============================================================================
       // MAIN RENDER FUNCTION
       // =============================================================================
@@ -4498,7 +4096,6 @@
 
       function render() {
         testViewActive = false; // Reset test mode when normal render is triggered
-        const showRaw = document.getElementById("viewRaw").checked;
         const container = document.getElementById("diff");
 
         // Save expanded state before re-rendering
@@ -4524,10 +4121,7 @@
 
         const processed = processAllEntries(diffEntries);
 
-        if (showRaw) {
-          container.innerHTML = '<div class="trace-group"><div class="trace-body" style="display:block;"><pre>' + renderRawView(processed).replace(/</g, "&lt;") + "</pre></div></div>";
-        } else {
-          container.innerHTML = renderPrettyView(processed);
+        container.innerHTML = renderPrettyView(processed);
           htmlFormatter.hideUnchanged();
 
           // Wire up lazy source loaders
@@ -4717,41 +4311,90 @@
                 let foundFile = null;
                 let foundInlineValue = null;
 
-                // Use the XMLUI parser to find AppState elements by bucket
                 for (const file of sourceFiles) {
                   const source = await fetchSourceRange(file, 0, 999999);
                   if (!source) continue;
 
-                  try {
-                    const xmlui = new XmluiSource(source, file);
-                    const appStates = xmlui.findByTagName("AppState");
+                  // For "default" bucket, find AppState without explicit bucket attribute
+                  if (bucketName === "default") {
+                    // Find <AppState ...> elements
+                    const lines = source.split('\n');
+                    for (let i = 0; i < lines.length; i++) {
+                      if (lines[i].includes('<AppState')) {
+                        // Find the complete AppState element
+                        let startLine = i;
+                        let endLine = i;
+                        while (endLine < lines.length && !lines[endLine].includes('/>') && !lines[endLine].includes('</AppState>') && !lines[endLine].includes('>')) endLine++;
 
-                    for (const el of appStates) {
-                      const elBucket = el.attributes.bucket || "default";
-                      if (elBucket !== bucketName) continue;
+                        const appStateBlock = lines.slice(startLine, endLine + 1).join('\n');
+                        // Skip if it has an explicit bucket attribute (not the default)
+                        if (/bucket\s*=/.test(appStateBlock)) continue;
 
-                      foundFile = file;
-                      const initialValue = el.attributes.initialValue || "";
-
-                      // Check for function call: initialValue="{loadData()}"
-                      const funcMatch = initialValue.match(/^\{?\s*(\w+)\s*\(/);
-                      if (funcMatch) {
-                        foundFunc = funcMatch[1];
-                        break;
+                        // Found default AppState - check for initialValue
+                        const funcMatch = appStateBlock.match(/initialValue\s*=\s*["']\{\s*(\w+)\s*\(/);
+                        if (funcMatch) {
+                          foundFunc = funcMatch[1];
+                          foundFile = file;
+                          break;
+                        }
+                        // Check for inline value
+                        const inlineMatch = appStateBlock.match(/initialValue\s*=\s*["']\{\{([\s\S]*?)\}\}["']/);
+                        if (inlineMatch) {
+                          foundInlineValue = { content: inlineMatch[1].trim(), startLine: startLine + 1, file };
+                          break;
+                        }
                       }
+                    }
+                    if (foundFunc || foundInlineValue) break;
+                    continue;
+                  }
 
-                      // Check for inline object: initialValue="{{foo: 1}}"
-                      const inlineMatch = initialValue.match(/^\{\{([\s\S]*?)\}\}$/);
-                      if (inlineMatch) {
-                        foundInlineValue = { content: inlineMatch[1].trim(), startLine: el.startLine, file };
+                  // Look for bucket="bucketName" with initialValue function call
+                  const bucketPattern = new RegExp(`bucket\\s*=\\s*["']${bucketName}["'][^>]*initialValue\\s*=\\s*["']\\{\\s*(\\w+)\\s*\\(`, 'i');
+                  const match = source.match(bucketPattern);
+                  if (match) {
+                    foundFunc = match[1];
+                    foundFile = file;
+                    break;
+                  }
+                  // Also try reverse order: initialValue before bucket
+                  const reversePattern = new RegExp(`initialValue\\s*=\\s*["']\\{\\s*(\\w+)\\s*\\([^>]*bucket\\s*=\\s*["']${bucketName}["']`, 'i');
+                  const reverseMatch = source.match(reversePattern);
+                  if (reverseMatch) {
+                    foundFunc = reverseMatch[1];
+                    foundFile = file;
+                    break;
+                  }
+
+                  // Look for inline object literal: initialValue="{{...}}"
+                  const inlinePattern = new RegExp(`bucket\\s*=\\s*["']${bucketName}["']`, 'i');
+                  if (inlinePattern.test(source)) {
+                    // Find the AppState element and extract initialValue
+                    const lines = source.split('\n');
+                    for (let i = 0; i < lines.length; i++) {
+                      if (lines[i].includes(`bucket="${bucketName}"`) || lines[i].includes(`bucket='${bucketName}'`)) {
+                        // Look backwards and forwards for the full AppState element
+                        let startLine = i;
+                        let endLine = i;
+                        // Find start of AppState
+                        while (startLine > 0 && !lines[startLine].includes('<AppState')) startLine--;
+                        // Find end (closing > or />)
+                        while (endLine < lines.length && !lines[endLine].includes('/>') && !lines[endLine].includes('</AppState>')) endLine++;
+
+                        const appStateBlock = lines.slice(startLine, endLine + 1).join('\n');
+                        // Extract initialValue content
+                        const inlineMatch = appStateBlock.match(/initialValue\s*=\s*["']\{\{([\s\S]*?)\}\}["']/);
+                        if (inlineMatch) {
+                          foundInlineValue = inlineMatch[1].trim();
+                          foundFile = file;
+                          // Store line number for display
+                          foundInlineValue = { content: foundInlineValue, startLine: startLine + 1, file };
+                        }
                         break;
                       }
                     }
-                  } catch (e) {
-                    // Parser failed — skip this file
+                    if (foundInlineValue) break;
                   }
-
-                  if (foundFunc || foundInlineValue) break;
                 }
 
                 if (foundFunc && foundFile) {
@@ -4805,79 +4448,60 @@
               if (!details.open || loaded) return;
               loaded = true;
               const pre = details.querySelector("pre");
-              pre.textContent = "Searching for component definition...";
+              pre.textContent = "Searching for AppState definition...";
 
               try {
                 const sourceFiles = getSourceFileList();
                 let bucketName = null;
                 let foundFile = null;
                 let foundFunc = null;
-                let componentTag = null;
-                let element = null;
 
-                // Step 1: Use the XMLUI parser to find the element by id
+                // Step 1: Find <AppState id="stateId" to get the bucket name
                 for (const file of sourceFiles) {
                   const source = await fetchSourceRange(file, 0, 999999);
                   if (!source) continue;
 
-                  try {
-                    const xmlui = new XmluiSource(source, file);
-                    const el = xmlui.findById(stateId);
-                    if (el) {
-                      element = el;
-                      componentTag = el.tagName;
-                      foundFile = file;
-                      bucketName = el.attributes.bucket || stateId;
-                      break;
-                    }
-                  } catch (e) {
-                    // Parser failed — skip this file
+                  // Look for <AppState id="stateId" ... bucket="bucketName"
+                  const idPattern = new RegExp(`<AppState[^>]*\\bid\\s*=\\s*["']${stateId}["'][^>]*bucket\\s*=\\s*["'](\\w+)["']`, 'i');
+                  const match = source.match(idPattern);
+                  if (match) {
+                    bucketName = match[1];
+                    foundFile = file;
+                    break;
+                  }
+                  // Try reverse order
+                  const reversePattern = new RegExp(`<AppState[^>]*bucket\\s*=\\s*["'](\\w+)["'][^>]*\\bid\\s*=\\s*["']${stateId}["']`, 'i');
+                  const reverseMatch = source.match(reversePattern);
+                  if (reverseMatch) {
+                    bucketName = reverseMatch[1];
+                    foundFile = file;
+                    break;
                   }
                 }
 
-                if (!element) {
-                  pre.textContent = `// Could not find element with id="${stateId}"\n// Searched ${sourceFiles.length} source files`;
+                if (!bucketName) {
+                  pre.textContent = `// Could not find <AppState id="${stateId}" ...>\n// Searched ${sourceFiles.length} source files`;
                   return;
                 }
 
-                // For DataSource, show the element source directly (no initialValue to find)
-                if (componentTag === "DataSource") {
-                  const attrs = Object.entries(element.attributes).map(([k, v]) => `${k}="${v}"`).join(" ");
-                  pre.textContent = `// DataSource id="${stateId}" in ${foundFile.split("/").pop()}\n// ${stateId}.value.${methodName}() is a JavaScript array method on the fetched data\n\n<${componentTag} ${attrs} />`;
-                  return;
-                }
+                // Step 2: Find the initialValue function for this bucket
+                for (const file of sourceFiles) {
+                  const source = await fetchSourceRange(file, 0, 999999);
+                  if (!source) continue;
 
-                // Step 2: For AppState, find the initialValue function
-                const initialValue = element.attributes.initialValue;
-                if (initialValue) {
-                  const funcMatch = initialValue.match(/\{\s*(\w+)\s*\(/);
-                  if (funcMatch) {
-                    foundFunc = funcMatch[1];
+                  const bucketPattern = new RegExp(`bucket\\s*=\\s*["']${bucketName}["'][^>]*initialValue\\s*=\\s*["']\\{\\s*(\\w+)\\s*\\(`, 'i');
+                  const match = source.match(bucketPattern);
+                  if (match) {
+                    foundFunc = match[1];
+                    foundFile = file;
+                    break;
                   }
-                }
-
-                if (!foundFunc) {
-                  // Try searching other files for AppState with matching bucket
-                  for (const file of sourceFiles) {
-                    const source = await fetchSourceRange(file, 0, 999999);
-                    if (!source) continue;
-
-                    try {
-                      const xmlui = new XmluiSource(source, file);
-                      const appStates = xmlui.findByTagName("AppState");
-                      for (const el of appStates) {
-                        if ((el.attributes.bucket || "default") === bucketName && el.attributes.initialValue) {
-                          const funcMatch = el.attributes.initialValue.match(/^\{?\s*(\w+)\s*\(/);
-                          if (funcMatch) {
-                            foundFunc = funcMatch[1];
-                            foundFile = file;
-                            break;
-                          }
-                        }
-                      }
-                    } catch (e) { /* parser failed */ }
-
-                    if (foundFunc) break;
+                  const reversePattern = new RegExp(`initialValue\\s*=\\s*["']\\{\\s*(\\w+)\\s*\\([^>]*bucket\\s*=\\s*["']${bucketName}["']`, 'i');
+                  const reverseMatch = source.match(reversePattern);
+                  if (reverseMatch) {
+                    foundFunc = reverseMatch[1];
+                    foundFile = file;
+                    break;
                   }
                 }
 
@@ -4936,15 +4560,12 @@
             }
           });
           // Note: We don't restore details[open] state because lazy loaders depend on the toggle event
-        }
       }
 
       // =============================================================================
       // EVENT HANDLERS
       // =============================================================================
 
-      document.getElementById("viewPretty").addEventListener("change", render);
-      document.getElementById("viewRaw").addEventListener("change", render);
 
       document.getElementById("clear").addEventListener("click", () => {
         if (window.parent && window.parent._xsLogs) window.parent._xsLogs.length = 0;
@@ -4974,10 +4595,6 @@
         // Remove container outlines
         document.querySelectorAll(".search-match-container").forEach(el => {
           el.classList.remove("search-match-container");
-        });
-        // Restore visibility of all trace groups
-        document.querySelectorAll(".trace-group").forEach(group => {
-          group.style.display = "";
         });
         searchState.matches = [];
         searchState.currentIndex = -1;
@@ -5083,13 +4700,6 @@
 
         searchState.matches = highlightTextInNode(diffEl, regex);
         searchState.currentIndex = searchState.matches.length > 0 ? 0 : -1;
-
-        // Filter: hide trace groups that don't contain any matches
-        const groups = diffEl.querySelectorAll(".trace-group");
-        groups.forEach((group) => {
-          const hasMatch = group.querySelector(".search-highlight");
-          group.style.display = hasMatch ? "" : "none";
-        });
 
         if (searchState.matches.length > 0) {
           navigateToMatch(0);
@@ -6728,199 +6338,36 @@
         });
 
         // =========================================================================
-        // TEST SUITE: XMLUI Parser — AppState/DataSource lookup
-        // =========================================================================
-        test("XMLUI Parser", "findByTagName finds AppState elements", () => {
-          const source = `<App><AppState id="s1" bucket="main" initialValue="{loadData()}" /><AppState id="s2" bucket="other" /></App>`;
-          const xmlui = new XmluiSource(source, "test.xmlui");
-          const states = xmlui.findByTagName("AppState");
-          assertEqual(states.length, 2, "Should find 2 AppState elements");
-          assertEqual(states[0].attributes.bucket, "main");
-          assertEqual(states[1].attributes.bucket, "other");
-        });
-
-        test("XMLUI Parser", "findByTagName finds DataSource elements", () => {
-          const source = `<App><DataSource id="users" url="https://api.example.com/users" /></App>`;
-          const xmlui = new XmluiSource(source, "test.xmlui");
-          const sources = xmlui.findByTagName("DataSource");
-          assertEqual(sources.length, 1, "Should find 1 DataSource");
-          assertEqual(sources[0].attributes.id, "users");
-          assertEqual(sources[0].attributes.url, "https://api.example.com/users");
-        });
-
-        test("XMLUI Parser", "findById distinguishes DataSource from AppState", () => {
-          const source = `<App><DataSource id="users" url="/api" /><AppState id="state1" bucket="main" /></App>`;
-          const xmlui = new XmluiSource(source, "test.xmlui");
-          const ds = xmlui.findById("users");
-          const as = xmlui.findById("state1");
-          assertEqual(ds.tagName, "DataSource", "Should identify DataSource");
-          assertEqual(as.tagName, "AppState", "Should identify AppState");
-        });
-
-        test("XMLUI Parser", "AppState without bucket defaults to 'default'", () => {
-          const source = `<App><AppState id="s1" initialValue="{init()}" /></App>`;
-          const xmlui = new XmluiSource(source, "test.xmlui");
-          const states = xmlui.findByTagName("AppState");
-          assertEqual(states.length, 1);
-          assertEqual(states[0].attributes.bucket, undefined, "No explicit bucket");
-          // Code should treat missing bucket as "default"
-        });
-
-        test("XMLUI Parser", "initialValue function name extraction", () => {
-          const source = `<App><AppState id="s1" bucket="main" initialValue="{loadData()}" /></App>`;
-          const xmlui = new XmluiSource(source, "test.xmlui");
-          const el = xmlui.findById("s1");
-          const match = el.attributes.initialValue.match(/^\{?\s*(\w+)\s*\(/);
-          assertTrue(match !== null, "Should match function pattern");
-          assertEqual(match[1], "loadData", "Should extract function name");
-        });
-
-        test("XMLUI Parser", "initialValue inline object extraction", () => {
-          const source = `<App><AppState id="s1" bucket="main" initialValue="{{foo: 1, bar: 2}}" /></App>`;
-          const xmlui = new XmluiSource(source, "test.xmlui");
-          const el = xmlui.findById("s1");
-          const match = el.attributes.initialValue.match(/^\{\{([\s\S]*?)\}\}$/);
-          assertTrue(match !== null, "Should match inline object pattern");
-          assertContains(match[1], "foo: 1", "Should extract object content");
-        });
-
-        // =========================================================================
         // TEST SUITE: shouldIncludeTrace
         // =========================================================================
         test("shouldIncludeTrace", "returns false for empty trace", () => {
-          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 0, interactionCount: 0 } };
+          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 0 } };
           assertEqual(shouldIncludeTrace(item), false, "Empty trace should not be included");
         });
 
         test("shouldIncludeTrace", "returns true for trace with changes", () => {
-          const item = { traceId: "t-test", summary: { changeCount: 1, hasError: false, startCount: 0, behavioralEventCount: 0, interactionCount: 0 } };
+          const item = { traceId: "t-test", summary: { changeCount: 1, hasError: false, startCount: 0, behavioralEventCount: 0 } };
           assertEqual(shouldIncludeTrace(item), true, "Trace with changes should be included");
         });
 
         test("shouldIncludeTrace", "returns true for trace with error", () => {
-          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: true, startCount: 0, behavioralEventCount: 0, interactionCount: 0 } };
+          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: true, startCount: 0, behavioralEventCount: 0 } };
           assertEqual(shouldIncludeTrace(item), true, "Trace with error should be included");
         });
 
         test("shouldIncludeTrace", "returns true for trace with handlers", () => {
-          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: false, startCount: 1, behavioralEventCount: 0, interactionCount: 0 } };
+          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: false, startCount: 1, behavioralEventCount: 0 } };
           assertEqual(shouldIncludeTrace(item), true, "Trace with handlers should be included");
         });
 
         test("shouldIncludeTrace", "returns true for trace with behavioral events", () => {
-          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 1, interactionCount: 0 } };
+          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 1 } };
           assertEqual(shouldIncludeTrace(item), true, "Trace with behavioral events should be included");
         });
 
         test("shouldIncludeTrace", "returns true for empty startup trace", () => {
-          const item = { traceId: "startup-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 0, interactionCount: 0 } };
+          const item = { traceId: "startup-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 0 } };
           assertEqual(shouldIncludeTrace(item), true, "Startup trace should always be included");
-        });
-
-        test("shouldIncludeTrace", "returns true for interaction-only trace", () => {
-          const item = { traceId: "i-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 0, interactionCount: 1 } };
-          assertEqual(shouldIncludeTrace(item), true, "Interaction-only trace should be included");
-        });
-
-        test("shouldIncludeTrace", "returns false when all counts are zero", () => {
-          const item = { traceId: "t-test", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 0, interactionCount: 0 } };
-          assertEqual(shouldIncludeTrace(item), false, "Trace with no content and no interactions should not be included");
-        });
-
-        // =========================================================================
-        // TEST SUITE: interaction-only trace componentText
-        // =========================================================================
-        test("Trace Summary", "interaction-only trace shows component type with aria-label", () => {
-          const entries = [
-            { kind: "interaction", traceId: "i-test", componentType: "RadioGroup", componentLabel: "Item selector", interaction: "click", ariaName: "First Item", ts: 100, perfTs: 100 },
-          ];
-          const summary = buildTraceSummary(entries);
-          assertContains(summary.componentText, "RadioGroup", "Should contain component type");
-          assertContains(summary.componentText, "Item selector", "Should contain aria-label");
-          assertContains(summary.componentText, "click", "Should contain interaction type");
-        });
-
-        test("Trace Summary", "interaction-only trace without aria-label shows component type", () => {
-          const entries = [
-            { kind: "interaction", traceId: "i-test2", componentType: "Button", componentLabel: "Button", interaction: "click", ts: 100, perfTs: 100 },
-          ];
-          const summary = buildTraceSummary(entries);
-          assertContains(summary.componentText, "Button", "Should contain component type");
-          assertEqual(summary.componentText.indexOf("\u00ab"), -1, "Should not have guillemets when label equals type");
-        });
-
-        test("Trace Summary", "interactionCount is populated in summary", () => {
-          const entries = [
-            { kind: "interaction", traceId: "i-test3", componentType: "Checkbox", componentLabel: "agree", interaction: "click", ts: 100, perfTs: 100 },
-          ];
-          const summary = buildTraceSummary(entries);
-          assertEqual(summary.interactionCount, 1, "Should count interaction events");
-        });
-
-        // =========================================================================
-        // TEST SUITE: listenTo:change
-        // =========================================================================
-        test("listenTo:change", "is treated as behavioral event (not infrastructure)", () => {
-          const entries = [
-            { kind: "listenTo:change", traceId: "t-test-lc", component: "ChangeListener", displayLabel: "0 → 2 items", ts: 100, perfTs: 100 },
-          ];
-          const summary = buildTraceSummary(entries);
-          assertTrue(summary.behavioralEventCount > 0, "listenTo:change should count as behavioral");
-        });
-
-        test("listenTo:change", "trace with only listenTo:change passes shouldIncludeTrace", () => {
-          const item = { traceId: "t-test-lc2", summary: { changeCount: 0, hasError: false, startCount: 0, behavioralEventCount: 1, interactionCount: 0 } };
-          assertEqual(shouldIncludeTrace(item), true, "Trace with listenTo:change should be included");
-        });
-
-        test("listenTo:change", "displayLabel appears in trace componentText", () => {
-          const entries = [
-            { kind: "listenTo:change", traceId: "t-test-lc3", component: "ChangeListener", displayLabel: "2 → 3 items", ts: 100, perfTs: 100 },
-          ];
-          const summary = buildTraceSummary(entries);
-          assertContains(summary.componentText, "listenTo:change", "Should derive title from event kind");
-        });
-
-        test("listenTo:change", "appears alongside handler events in same trace", () => {
-          const entries = [
-            { kind: "listenTo:change", traceId: "t-test-lc4", component: "ChangeListener", displayLabel: "0 → 2 items", ts: 100, perfTs: 100 },
-            { kind: "handler:start", traceId: "t-test-lc4", eventName: "didChange", componentType: "ChangeListener", ts: 101, perfTs: 101 },
-            { kind: "handler:complete", traceId: "t-test-lc4", eventName: "didChange", componentType: "ChangeListener", ts: 110, perfTs: 110 },
-          ];
-          const summary = buildTraceSummary(entries);
-          assertTrue(summary.behavioralEventCount > 0, "Should count listenTo:change as behavioral");
-          assertTrue(summary.startCount > 0, "Should also count handler:start");
-        });
-
-        // =========================================================================
-        // TEST SUITE: resolveAppUrl
-        // =========================================================================
-        test("resolveAppUrl", "returns full URL unchanged", () => {
-          const url = "http://localhost:8000/Main.xmlui";
-          assertEqual(resolveAppUrl(url), url, "Full URL should pass through unchanged");
-        });
-
-        test("resolveAppUrl", "returns https URL unchanged", () => {
-          const url = "https://example.com/app/Main.xmlui";
-          assertEqual(resolveAppUrl(url), url, "HTTPS URL should pass through unchanged");
-        });
-
-        test("resolveAppUrl", "resolves relative path against origin", () => {
-          const result = resolveAppUrl("Main.xmlui");
-          assertTrue(result.includes("://"), "Should produce a full URL");
-          assertTrue(result.endsWith("/Main.xmlui"), "Should end with the filename");
-        });
-
-        test("resolveAppUrl", "strips leading slash from relative path", () => {
-          const result = resolveAppUrl("/Main.xmlui");
-          assertTrue(!result.includes("//Main.xmlui"), "Should not have double slash before filename");
-          assertTrue(result.endsWith("/Main.xmlui"), "Should end with the filename");
-        });
-
-        test("resolveAppUrl", "handles nested relative paths", () => {
-          const result = resolveAppUrl("components/MyComp.xmlui");
-          assertTrue(result.includes("://"), "Should produce a full URL");
-          assertTrue(result.endsWith("/components/MyComp.xmlui"), "Should preserve path");
         });
 
         // =========================================================================
@@ -7024,18 +6471,15 @@
         // =========================================================================
         // TEST SUITE: Trace Filtering
         // =========================================================================
-        test("Trace Filtering", "interaction-only trace is shown in both views", () => {
-          // Trace with only an interaction event (no handlers, no state changes)
-          // should now be shown since interactions are valid content
+        test("Trace Filtering", "empty trace is hidden", () => {
+          // Trace with no state changes, no errors, no handlers, no behavioral events
           const traceId = TestFramework.interactionTraceId();
           const entries = [
             TestFramework.events.interaction("click", "EmptyButton", { traceId, perfTs: 100 }),
           ];
           const processed = processAllEntries(entries);
           const pretty = renderPrettyView(processed);
-          const raw = renderRawView(processed);
-          assertContains(pretty, "EmptyButton", "Interaction-only trace should be shown in pretty view");
-          assertContains(raw, "EmptyButton", "Interaction-only trace should be shown in raw view");
+          assertTrue(!pretty.includes("EmptyButton"), "Empty trace should be hidden in pretty view");
         });
 
         test("Trace Filtering", "trace with only state changes is shown", () => {
@@ -7048,9 +6492,7 @@
           ];
           const processed = processAllEntries(entries);
           const pretty = renderPrettyView(processed);
-          const raw = renderRawView(processed);
           assertContains(pretty, "SaveBtn", "Trace with changes should appear in pretty view");
-          assertContains(raw, "SaveBtn", "Trace with changes should appear in raw view");
         });
 
         test("Trace Filtering", "trace with only error is shown", () => {
@@ -7062,9 +6504,7 @@
           ];
           const processed = processAllEntries(entries);
           const pretty = renderPrettyView(processed);
-          const raw = renderRawView(processed);
           assertContains(pretty, "ErrorBtn", "Trace with error should appear in pretty view");
-          assertContains(raw, "ErrorBtn", "Trace with error should appear in raw view");
         });
 
         test("Trace Filtering", "trace with only handlers is shown", () => {
@@ -7076,9 +6516,7 @@
           ];
           const processed = processAllEntries(entries);
           const pretty = renderPrettyView(processed);
-          const raw = renderRawView(processed);
           assertContains(pretty, "HandlerBtn", "Trace with handlers should appear in pretty view");
-          assertContains(raw, "HandlerBtn", "Trace with handlers should appear in raw view");
         });
 
         test("Trace Filtering", "trace with only behavioral events is shown", () => {
@@ -7089,9 +6527,7 @@
           ];
           const processed = processAllEntries(entries);
           const pretty = renderPrettyView(processed);
-          const raw = renderRawView(processed);
           assertContains(pretty, "NativeBtn", "Trace with behavioral events should appear in pretty view");
-          assertContains(raw, "NativeBtn", "Trace with behavioral events should appear in raw view");
         });
 
         test("Trace Filtering", "startup trace shown even with no content", () => {
@@ -7102,9 +6538,7 @@
           ];
           const processed = processAllEntries(entries);
           const pretty = renderPrettyView(processed);
-          const raw = renderRawView(processed);
           assertContains(pretty, "Startup", "Empty startup trace should appear in pretty view");
-          assertContains(raw, "Startup", "Empty startup trace should appear in raw view");
         });
 
         // =========================================================================
@@ -7201,66 +6635,6 @@
         });
 
         // =========================================================================
-        // TEST SUITE: Cross-View Consistency
-        // =========================================================================
-        test("Cross-View Consistency", "pretty and raw show same trace count for button click", () => {
-          const events = TestFramework.scenarios.buttonClick();
-          const processed = processAllEntries(events);
-          const pretty = renderPrettyView(processed);
-          const raw = renderRawView(processed);
-          const prettyCount = (pretty.match(/trace-group/g) || []).length;
-          const rawCount = (raw.match(/--- Trace \d+:/g) || []).length;
-          assertEqual(prettyCount, rawCount, "Pretty and raw should show same trace count");
-        });
-
-        test("Cross-View Consistency", "pretty and raw show same trace count for mixed scenario", () => {
-          const traceId1 = TestFramework.interactionTraceId();
-          const traceId2 = TestFramework.interactionTraceId();
-          const traceId3 = TestFramework.interactionTraceId();
-          const entries = [
-            // Trace with handler
-            TestFramework.events.interaction("click", "Save", { traceId: traceId1, perfTs: 100 }),
-            TestFramework.events.handlerStart("click", { traceId: traceId1, componentLabel: "Save", perfTs: 101 }),
-            TestFramework.events.handlerComplete("click", { traceId: traceId1, componentLabel: "Save", perfTs: 110, duration: 9 }),
-            // Trace with native event only
-            TestFramework.events.interaction("click", "Next", { traceId: traceId2, perfTs: 200 }),
-            TestFramework.events.nativeEvent("navigate", { traceId: traceId2, displayLabel: "April 2026", perfTs: 201 }),
-            // Empty trace (should be hidden in both)
-            TestFramework.events.interaction("click", "Empty", { traceId: traceId3, perfTs: 300 }),
-          ];
-          const processed = processAllEntries(entries);
-          const pretty = renderPrettyView(processed);
-          const raw = renderRawView(processed);
-          const prettyCount = (pretty.match(/trace-group/g) || []).length;
-          const rawCount = (raw.match(/--- Trace \d+:/g) || []).length;
-          assertEqual(prettyCount, rawCount, "Pretty and raw should show same trace count for mixed scenario");
-          // All 3 traces should show: handler, native event, and interaction-only
-          assertEqual(rawCount, 3, "Should show 3 traces (handler + native event + interaction-only)");
-        });
-
-        test("Cross-View Consistency", "startup trace appears in both views", () => {
-          const events = TestFramework.scenarios.startup();
-          const processed = processAllEntries(events);
-          const pretty = renderPrettyView(processed);
-          const raw = renderRawView(processed);
-          assertContains(pretty, "Startup", "Startup should appear in pretty view");
-          assertContains(raw, "Startup", "Startup should appear in raw view");
-        });
-
-        test("Cross-View Consistency", "native event displayLabel in both view headers", () => {
-          const traceId = TestFramework.interactionTraceId();
-          const entries = [
-            TestFramework.events.interaction("click", "Next", { traceId, perfTs: 100 }),
-            TestFramework.events.nativeEvent("navigate", { traceId, displayLabel: "April 2026", perfTs: 101 }),
-          ];
-          const processed = processAllEntries(entries);
-          const pretty = renderPrettyView(processed);
-          const raw = renderRawView(processed);
-          assertContains(pretty, "April 2026", "Pretty view should show displayLabel");
-          assertContains(raw, "April 2026", "Raw view should show displayLabel");
-        });
-
-        // =========================================================================
         // TEST SUITE: Rendering
         // =========================================================================
         test("Rendering", "renderPrettyView generates HTML", () => {
@@ -7278,20 +6652,6 @@
           assertContains(html, "contextmenu", "Should show contextmenu");
         });
 
-        test("Rendering", "renderRawView generates markdown", () => {
-          const events = TestFramework.scenarios.buttonClick();
-          const processed = processAllEntries(events);
-          const markdown = renderRawView(processed);
-          assertTrue(markdown.length > 0, "Should generate markdown");
-          assertContains(markdown, "Trace", "Should have Trace header");
-        });
-
-        test("Rendering", "renderRawView includes timeline breakdown", () => {
-          const events = TestFramework.scenarios.publishPost();
-          const processed = processAllEntries(events);
-          const markdown = renderRawView(processed);
-          assertContains(markdown, "timeline:", "Should have timeline section");
-        });
 
         // =========================================================================
         // TEST SUITE: Export
@@ -7709,7 +7069,7 @@
         modalFileContent.textContent = "Loading...";
         fileModal.classList.add("open");
 
-        fetch(resolveAppUrl(filePath))
+        fetch(filePath)
           .then(res => {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             return res.text();
