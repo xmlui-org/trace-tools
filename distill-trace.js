@@ -356,6 +356,61 @@ function distillTrace(logs) {
     }
   }
 
+  // Collapse consecutive textbox keydowns into fill steps.
+  // Match against raw value:change events from the original logs (not distilled steps,
+  // since value:change-only trace groups are dropped by extractStepFromJsonLogs).
+  // Uses componentLabel (component uid) for matching since ariaName can differ
+  // between the DOM accessible name and wrapComponent's aria-label cascade.
+  {
+    const rawValueChanges = logs
+      .filter(e => e.kind === 'value:change')
+      .map(e => ({ componentLabel: e.componentLabel, ariaName: e.ariaName, value: e.displayLabel, perfTs: e.perfTs || 0 }));
+
+    const collapsed = [];
+    let i = 0;
+    while (i < steps.length) {
+      const step = steps[i];
+
+      if (step.action === 'keydown' && step.target?.ariaRole === 'textbox' && step.target?.ariaName) {
+        const ariaName = step.target.ariaName;
+        const componentId = step.target.componentId;
+        const startTs = step._firstPerfTs || 0;
+
+        // Consume all consecutive keydowns on the same textbox
+        while (i < steps.length &&
+               steps[i].action === 'keydown' &&
+               steps[i].target?.ariaRole === 'textbox' &&
+               steps[i].target?.ariaName === ariaName) {
+          i++;
+        }
+        const endTs = steps[i - 1]._firstPerfTs || startTs;
+
+        // Find raw value:change events for this textbox in the time window
+        const relevantVCs = rawValueChanges.filter(vc => {
+          const idMatch = (componentId && vc.componentLabel === componentId) ||
+                          vc.ariaName === ariaName;
+          return idMatch && vc.perfTs >= startTs && vc.perfTs <= endTs + 500;
+        });
+
+        const finalValue = relevantVCs.length > 0
+          ? relevantVCs[relevantVCs.length - 1].value
+          : '';
+
+        collapsed.push({
+          action: 'fill',
+          target: { ...step.target },
+          fillValue: finalValue || '',
+          _firstPerfTs: startTs,
+        });
+      } else {
+        collapsed.push(step);
+        i++;
+      }
+    }
+    steps.length = 0;
+    steps.push(...collapsed);
+  }
+
   // Clean up internal metadata
   for (const step of steps) {
     delete step._submenuOpens;
@@ -488,6 +543,12 @@ function extractStepFromJsonLogs(trace) {
     component: interaction.componentType || interaction.componentLabel,
     label: null
   };
+
+  // Capture component id for cross-event matching (e.g. keydown → value:change)
+  const componentId = interaction.uid || interaction.detail?.componentId;
+  if (componentId) {
+    target.componentId = componentId;
+  }
 
   // Capture targetTag for better selector generation
   if (interaction.detail?.targetTag) {
@@ -687,6 +748,7 @@ function extractStepFromJsonLogs(trace) {
         value: vc.displayLabel != null ? String(vc.displayLabel) : undefined,
       };
       if (vc.ariaName) entry.ariaName = vc.ariaName;
+      if (vc.componentLabel) entry.componentLabel = vc.componentLabel;
       if (vc.files) entry.files = vc.files;
       byComponent.set(vc.component, entry);
     }

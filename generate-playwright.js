@@ -734,6 +734,15 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
       break;
     }
 
+    case 'fill': {
+      const fillName = step.target?.ariaName;
+      const fillValue = step.fillValue || '';
+      if (fillName) {
+        lines.push(`${indent}await page.getByRole('textbox', { name: '${esc(fillName)}' }).fill('${esc(fillValue)}');`);
+      }
+      break;
+    }
+
     case 'toast':
       for (const toast of step.toasts || []) {
         lines.push(`${indent}await expect(page.locator('[role="status"]').filter({ hasText: '${esc(toast.message)}' }).first()).toBeVisible({ timeout: 5000 });`);

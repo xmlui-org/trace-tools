@@ -327,7 +327,8 @@ function extractSemantics(input) {
     return extractSemanticsFromDistilled(input);
   }
 
-  // Get raw logs if we have distilled input
+  // For raw logs or JSON strings, distill first then extract semantics.
+  // This ensures stateDiffs and other distiller-computed fields are available.
   let logs;
   if (Array.isArray(input)) {
     logs = input;
@@ -343,11 +344,16 @@ function extractSemantics(input) {
         return null;
       }
     } else {
-      // Text format - can't extract semantics directly
       return null;
     }
   } else {
     return null;
+  }
+
+  // Distill raw logs to get stateDiffs and other computed fields
+  const distilledFromLogs = distillTrace(logs);
+  if (distilledFromLogs?.steps) {
+    return extractSemanticsFromDistilled(distilledFromLogs);
   }
 
   // Extract API calls
