@@ -850,6 +850,13 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
       const ariaRole = step.target?.ariaRole;
       const ariaName = vc.ariaName || step.target?.ariaName;
 
+      // NumberBox: assert on spinbutton role with aria-valuenow
+      if (vcComponent === 'NumberBox' && vc.ariaName) {
+        const spinLocator = `page.getByRole('spinbutton', { name: '${esc(vc.ariaName)}' })`;
+        lines.push(`${indent}await expect(${spinLocator}).toHaveAttribute('aria-valuenow', '${escaped}');`);
+        continue;
+      }
+
       // TextBox/Textarea: generate fill() for non-empty values, toHaveValue for empty
       if ((vcComponent === 'TextBox' || vcComponent === 'Textarea') && vc.ariaName) {
         const textLocator = `page.getByRole('textbox', { name: '${esc(vc.ariaName)}' })`;
@@ -973,8 +980,6 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
     // Number fields in formData → spinbutton fills.
     // Compare against other submits' formData to detect which values changed;
     // only fill changed spinbuttons to avoid unnecessary interactions.
-    // For the first submit, look ahead at subsequent submits to find "stable"
-    // values that didn't change — those are defaults that don't need filling.
     const numberFields = Object.entries(formData).filter(([, v]) => typeof v === 'number');
     if (numberFields.length > 0) {
       let refFormData = fillPlan._prevFormData;
@@ -990,7 +995,7 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}) {
       }
       const changedNumbers = refFormData
         ? numberFields.filter(([k, v]) => refFormData[k] !== v)
-        : numberFields;
+        : [];  // No reference form data — skip number fills for single-submit forms
       if (changedNumbers.length > 0) {
         for (const [key, value] of changedNumbers) {
           // Convert camelCase formData key to a regex pattern matching the ARIA label.
