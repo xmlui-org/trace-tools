@@ -688,20 +688,26 @@ function compareSemanticTraces(trace1, trace2, options = {}) {
         });
         continue;
       }
-      if (d1.after !== d2.after) {
+      // Compare shape: direction of change (grew/shrank/same) and count of added/removed
+      // Not specific values — "Jon Udell" vs "Jane Doe" should both pass
+      const dir1 = d1.after > d1.before ? 'up' : d1.after < d1.before ? 'down' : 'same';
+      const dir2 = d2.after > d2.before ? 'up' : d2.after < d2.before ? 'down' : 'same';
+      if (dir1 !== dir2) {
         report.match = false;
         report.differences.push({
-          type: 'state_diff_count',
-          message: `State "${path}" item count: expected ${d1.after}, got ${d2.after}`
+          type: 'state_diff_direction',
+          message: `State "${path}" direction: expected ${dir1} (${d1.before}→${d1.after}), got ${dir2} (${d2.before}→${d2.after})`
         });
       }
-      const missingAdded = (d1.added || []).filter(a => !(d2.added || []).includes(a));
-      const extraAdded = (d2.added || []).filter(a => !(d1.added || []).includes(a));
-      if (missingAdded.length > 0 || extraAdded.length > 0) {
+      const addedCount1 = (d1.added || []).length;
+      const addedCount2 = (d2.added || []).length;
+      const removedCount1 = (d1.removed || []).length;
+      const removedCount2 = (d2.removed || []).length;
+      if (addedCount1 !== addedCount2 || removedCount1 !== removedCount2) {
         report.match = false;
         report.differences.push({
-          type: 'state_diff_items',
-          message: `State "${path}" items differ: expected +[${d1.added?.join(', ')}], got +[${d2.added?.join(', ')}]`
+          type: 'state_diff_shape',
+          message: `State "${path}" shape: expected +${addedCount1}/-${removedCount1}, got +${addedCount2}/-${removedCount2}`
         });
       }
     }
@@ -812,9 +818,9 @@ function formatSemanticReport(report, options = {}) {
     if (sds.length > 0) {
       lines.push(`  State diffs:`);
       for (const sd of sds) {
-        const items = sd.added?.length ? ` +${sd.added.join(', ')}` : '';
-        const removed = sd.removed?.length ? ` -${sd.removed.join(', ')}` : '';
-        lines.push(`    ${sd.path}: ${sd.before} → ${sd.after}${items}${removed}`);
+        const dir = sd.after > sd.before ? 'up' : sd.after < sd.before ? 'down' : 'same';
+        const shape = `+${(sd.added || []).length}/-${(sd.removed || []).length}`;
+        lines.push(`    ${sd.path}: ${sd.before} → ${sd.after} (${dir}, ${shape})`);
       }
     } else {
       lines.push(`  State diffs: (none)`);
