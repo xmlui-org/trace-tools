@@ -458,8 +458,10 @@ function distillTrace(logs) {
 function extractStepFromJsonLogs(trace) {
   const events = trace.events;
 
-  // Find interaction event
-  const interaction = events.find(e => e.kind === 'interaction');
+  // Find interaction event — prefer one with ariaRole/ariaName over a bare click
+  // (e.g., Select dropdown: bare trigger click + option click with ariaRole="option")
+  const interactions = events.filter(e => e.kind === 'interaction');
+  const interaction = interactions.find(e => e.ariaRole && e.ariaRole !== 'banner') || interactions[0];
 
   // Handle startup (no interaction, starts with startup- traceId)
   if (!interaction && trace.traceId?.startsWith('startup-')) {
@@ -565,11 +567,16 @@ function extractStepFromJsonLogs(trace) {
   if (interaction.detail?.altKey) target.altKey = true;
 
   // Capture ARIA role and accessible name for Playwright getByRole selectors
-  if (interaction.detail?.ariaRole) {
-    target.ariaRole = interaction.detail.ariaRole;
+  // Check both detail (from AppContent click handler) and top-level (from component-emitted interactions)
+  if (interaction.detail?.ariaRole || interaction.ariaRole) {
+    target.ariaRole = interaction.detail?.ariaRole || interaction.ariaRole;
   }
-  if (interaction.detail?.ariaName) {
-    target.ariaName = interaction.detail.ariaName;
+  if (interaction.detail?.ariaName || interaction.ariaName) {
+    target.ariaName = interaction.detail?.ariaName || interaction.ariaName;
+  }
+  // Select option interactions carry the parent Select's aria-label for dropdown trigger generation
+  if (interaction.selectAriaLabel) {
+    target.selectAriaLabel = interaction.selectAriaLabel;
   }
 
   // Fallback: if the interaction didn't carry an ariaName (e.g., click on inner

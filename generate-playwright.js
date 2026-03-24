@@ -148,7 +148,7 @@ function generatePlaywright(distilled, options = {}) {
         }
         const next = orderedSteps[si + 1];
         const nt = next?.target;
-        if (nt?.ariaRole && nt?.ariaName) {
+        if (nt?.ariaRole && nt?.ariaName && nt.ariaRole !== 'option') {
           if (nt.ariaRole === 'row') {
             stepLines.push(`  await ${rowLocator(nt.ariaName)}.waitFor();`);
           } else if (nt.ariaRole === 'button') {
@@ -705,6 +705,18 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
           !step.await?.api?.some(a => ['POST', 'PUT', 'DELETE', 'PATCH'].includes(a.method))) {
         lines.pop();
         return [];
+      }
+      // Select option: open the dropdown trigger, then click the option
+      if (step.target?.ariaRole === 'option' && step.target?.ariaName) {
+        const optionName = esc(step.target.ariaName);
+        const selectLabel = step.target.selectAriaLabel ? esc(step.target.selectAriaLabel) : null;
+        if (selectLabel) {
+          lines.push(`${indent}await page.getByRole('combobox', { name: '${selectLabel}' }).click();`);
+        } else {
+          lines.push(`${indent}await page.getByRole('combobox').first().click();`);
+        }
+        lines.push(`${indent}await page.getByRole('option', { name: '${optionName}', exact: true }).click();`);
+        break;
       }
       const clickLines = generateClickCode(step, indent, 'click', fillPlan);
       lines.push(...clickLines);
