@@ -36,9 +36,25 @@ export async function traceFileUpload(page: Page, fileNames: string[]): Promise<
 export async function captureTrace(page: Page): Promise<void> {
   try {
     await page.waitForTimeout(500);
-    const logs = await page.evaluate(() => (window as any)._xsLogs || []);
+    // Serialize inside the browser to handle circular references from live objects
+    // (e.g., React Query cache). Playwright's page.evaluate uses JSON.stringify
+    // internally, which throws on circular refs. By serializing in-page with a
+    // circular-reference replacer, we get a safe string back.
+    const logsJson = await page.evaluate(() => {
+      const logs = (window as any)._xsLogs || [];
+      const seen = new WeakSet();
+      return JSON.stringify(logs, (_key, val) => {
+        if (typeof val === 'function') return undefined;
+        if (val && typeof val === 'object') {
+          if (seen.has(val)) return '[Circular]';
+          seen.add(val);
+        }
+        return val;
+      }, 2);
+    });
+    const logs = JSON.parse(logsJson);
     const traceFile = process.env.TRACE_OUTPUT || 'captured-trace.json';
-    fs.writeFileSync(traceFile, JSON.stringify(logs, null, 2));
+    fs.writeFileSync(traceFile, logsJson);
     console.log(`Trace captured to ${traceFile} (${logs.length} events)`);
 
     // Report XMLUI runtime errors from _xsLogs

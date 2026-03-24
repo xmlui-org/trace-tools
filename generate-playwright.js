@@ -277,9 +277,21 @@ function generatePlaywright(distilled, options = {}) {
     // Capture trace even on failure (if browser still open)
     try {
       await page.waitForTimeout(500);
-      const logs = await page.evaluate(() => (window as any)._xsLogs || []);
+      const logsJson = await page.evaluate(() => {
+        const logs = (window as any)._xsLogs || [];
+        const seen = new WeakSet();
+        return JSON.stringify(logs, (_key, val) => {
+          if (typeof val === 'function') return undefined;
+          if (val && typeof val === 'object') {
+            if (seen.has(val)) return '[Circular]';
+            seen.add(val);
+          }
+          return val;
+        }, 2);
+      });
+      const logs = JSON.parse(logsJson);
       const traceFile = process.env.TRACE_OUTPUT || 'captured-trace.json';
-      fs.writeFileSync(traceFile, JSON.stringify(logs, null, 2));
+      fs.writeFileSync(traceFile, logsJson);
       console.log(\`Trace captured to \${traceFile} (\${logs.length} events)\`);
       // Report XMLUI errors from _xsLogs
       const errors = logs.filter((e: any) => e.kind?.startsWith('error'));

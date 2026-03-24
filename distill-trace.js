@@ -1,6 +1,7 @@
 /**
  * Distill parsed trace into essential user journey steps
  */
+const TraceNormalize = require('./trace-normalize');
 
 
 /**
@@ -196,44 +197,10 @@ function distillTrace(logs) {
     traces.get(traceId).events.push(log);
   }
 
-  // Re-home orphaned value:change events to the nearest following interaction
-  // trace group. These fire outside XMLUI interaction context when:
-  // - FileInput's onDidChange triggers from native input change event
-  // - NumberBox spin buttons use raw DOM mousedown (fires before React onClick)
-  // - Any wrapComponent onDidChange that runs in a separate microtask
-  // Look in both the 'unknown' bucket and standalone trace groups without interactions.
-  const orphanedValueChanges = [];
-  for (const [tid, tg] of traces) {
-    const hasInteraction = tg.events.some(e => e.kind === 'interaction');
-    if (!hasInteraction) {
-      const vcs = tg.events.filter(e => e.kind === 'value:change');
-      orphanedValueChanges.push(...vcs);
-    }
-  }
-  for (const vc of orphanedValueChanges) {
-    const vcTs = vc.perfTs || vc.ts || 0;
-    // Find the nearest interaction trace group by time (preceding or following)
-    let bestTrace = null;
-    let bestDist = Infinity;
-    for (const [tid, tg] of traces) {
-      const hasInteraction = tg.events.some(e => e.kind === 'interaction');
-      if (hasInteraction) {
-        const dist = Math.abs(tg.firstPerfTs - vcTs);
-        if (dist < bestDist) {
-          bestTrace = tg;
-          bestDist = dist;
-        }
-      }
-    }
-    if (bestTrace) {
-      bestTrace.events.push(vc);
-      // Remove from original group
-      const origGroup = traces.get(vc.traceId || 'unknown');
-      if (origGroup) {
-        origGroup.events = origGroup.events.filter(e => e !== vc);
-      }
-    }
-  }
+  // Re-home orphaned value:change events to the nearest interaction trace group.
+  // Uses shared logic from trace-normalize.js.
+  const traceArrayForRehoming = Array.from(traces.values());
+  TraceNormalize.rehomeOrphanedValueChanges(traceArrayForRehoming, e => e.perfTs || e.ts || 0);
 
   // Convert to array and sort by first event time
   const traceArray = Array.from(traces.values())

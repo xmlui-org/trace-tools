@@ -749,10 +749,264 @@
       </div>
     </div>
 
+    <script>
+      // trace-normalize.js — inlined to keep xs-diff.html self-contained (minus xmlui-parser.es.js).
+      // Canonical source: trace-normalize.js (also used by distill-trace.js via require).
+      // ---- BEGIN trace-normalize ----
+      (function() {
+        function isPollingEvent(e) {
+          if (e.kind === 'state:changes' && e.eventName === 'DataSource:serverInfo') return true;
+          if ((e.kind === 'api:start' || e.kind === 'api:complete') &&
+              e.url && (e.url.includes('/status') || e.url.includes('/license'))) return true;
+          if ((e.kind === 'handler:start' || e.kind === 'handler:complete') &&
+              e.eventName === 'loaded' && e.componentLabel === 'serverInfo') return true;
+          if (e.kind === 'state:changes' && e.eventName && e.eventName.startsWith('AppState:')) {
+            return !!(e.diffJson && e.diffJson.every(function(d) {
+              return d.path === 'stats' || (d.path && d.path.startsWith('stats.')) ||
+                     d.path === 'status' || d.path === 'logs' || d.path === 'sessions';
+            }));
+          }
+          return false;
+        }
+        function isUserActionEvent(e) {
+          if (e.kind === 'api:start' || e.kind === 'api:complete' || e.kind === 'api:error') {
+            if (e.url && (e.url.includes('/status') || e.url.includes('/license'))) return false;
+            return true;
+          }
+          if (e.kind === 'state:changes') {
+            if (e.eventName === 'DataSource:serverInfo') return false;
+            if (e.eventName && e.eventName.startsWith('AppState:')) {
+              var isPolling = e.diffJson && e.diffJson.every(function(d) {
+                return d.path === 'stats' || (d.path && d.path.startsWith('stats.')) ||
+                       d.path === 'status' || d.path === 'logs' || d.path === 'sessions';
+              });
+              if (isPolling) return false;
+            }
+            return true;
+          }
+          if (e.kind === 'component:vars:change') {
+            if (e.diff && e.diff.some(function(d) { return d.path === 'serverStatus'; })) return false;
+            return true;
+          }
+          return false;
+        }
+        function isOrphanedPollingEvent(e) {
+          if ((e.kind === 'handler:start' || e.kind === 'handler:complete') && e.eventName === 'loaded') return true;
+          if ((e.kind === 'api:start' || e.kind === 'api:complete') && e.url && e.url.includes('/status')) return true;
+          if (e.kind === 'state:changes' && e.eventName === 'DataSource:serverInfo') return true;
+          if (e.kind === 'state:changes' && e.eventName && e.eventName.startsWith('AppState:')) {
+            return !!(e.diffJson && e.diffJson.every(function(d) {
+              return d.path === 'stats' || (d.path && d.path.startsWith('stats.')) ||
+                     d.path === 'status' || d.path === 'logs' || d.path === 'sessions';
+            }));
+          }
+          return false;
+        }
+        function defaultSortKey(entry) {
+          if (!entry) return 0;
+          if (entry.perfTs !== undefined) return entry.perfTs;
+          return entry.ts || 0;
+        }
+        var _requestIdCounter = 0;
+        function resetRequestIdCounter() { _requestIdCounter = 0; }
+        function matchApiPairs(entries) {
+          var pendingRequests = new Map();
+          entries.forEach(function(e) {
+            if (e.kind === 'api:start') {
+              if (!e._requestId) e._requestId = 'req-' + (++_requestIdCounter);
+              var key = e.instanceId || 'unknown';
+              if (!pendingRequests.has(key)) pendingRequests.set(key, []);
+              pendingRequests.get(key).push({ requestId: e._requestId, perfTs: e.perfTs, method: (e.method || 'GET').toUpperCase(), url: e.url, traceId: e.traceId });
+            }
+          });
+          var completions = entries.filter(function(e) { return (e.kind === 'api:complete' || e.kind === 'api:error') && !e._requestId; }).sort(function(a, b) { return (a.perfTs || 0) - (b.perfTs || 0); });
+          completions.forEach(function(e) {
+            var key = e.instanceId || 'unknown';
+            var queue = pendingRequests.get(key);
+            if (!queue || queue.length === 0) return;
+            var method = (e.method || 'GET').toUpperCase();
+            var completePerfTs = e.perfTs || Infinity;
+            var completeTraceId = e.traceId;
+            var bestIdx = -1, bestTs = -1;
+            queue.forEach(function(r, idx) {
+              if (r.method === method && r.url === e.url) {
+                if (completeTraceId && r.traceId && r.traceId !== completeTraceId) return;
+                if (r.perfTs <= completePerfTs && r.perfTs > bestTs) { bestIdx = idx; bestTs = r.perfTs; }
+              }
+            });
+            if (bestIdx === -1) {
+              var fallbackIdx = -1, fallbackTs = -1;
+              queue.forEach(function(r, idx) {
+                var ok = !completeTraceId || !r.traceId || r.traceId === completeTraceId;
+                if (ok && r.perfTs > fallbackTs) { fallbackIdx = idx; fallbackTs = r.perfTs; }
+              });
+              if (fallbackIdx === -1) fallbackIdx = 0;
+              bestIdx = fallbackIdx;
+            }
+            var matched = queue.splice(bestIdx, 1)[0];
+            e._requestId = matched.requestId;
+            e.traceId = matched.traceId || undefined;
+          });
+        }
+        function groupByTraceId(entries) {
+          var tracesMap = new Map(), orphans = [];
+          entries.forEach(function(entry) {
+            if (entry.traceId) {
+              if (!tracesMap.has(entry.traceId)) tracesMap.set(entry.traceId, []);
+              tracesMap.get(entry.traceId).push(entry);
+            } else { orphans.push(entry); }
+          });
+          return { tracesMap: tracesMap, orphans: orphans };
+        }
+        function findOrCreateStartupTraceId(tracesMap) {
+          var keys = Array.from(tracesMap.keys());
+          for (var i = 0; i < keys.length; i++) { if (keys[i].startsWith('startup-')) return keys[i]; }
+          var id = 'startup-synthetic';
+          tracesMap.set(id, []);
+          return id;
+        }
+        function mergeBootstrapOrphans(tracesMap, orphans, sortKeyFn) {
+          sortKeyFn = sortKeyFn || defaultSortKey;
+          var startupTraceId = findOrCreateStartupTraceId(tracesMap);
+          var startupEntries = tracesMap.get(startupTraceId);
+          var timestamps = startupEntries.map(function(e) { return sortKeyFn(e) || Infinity; });
+          var startupMinTs = Math.min.apply(null, timestamps.length > 0 ? timestamps : [Infinity]);
+          var remaining = [];
+          orphans.forEach(function(e) {
+            var ts = sortKeyFn(e);
+            if (ts === 0 || ts <= startupMinTs + 100) { e._bootstrap = true; startupEntries.push(e); }
+            else { remaining.push(e); }
+          });
+          return remaining;
+        }
+        function mergePollingTraces(tracesMap) {
+          var startupTraceId = findOrCreateStartupTraceId(tracesMap);
+          var startupEntries = tracesMap.get(startupTraceId);
+          var toMerge = [];
+          tracesMap.forEach(function(entries, traceId) {
+            if (traceId === startupTraceId) return;
+            var handlers = entries.filter(function(e) { return e.kind === 'handler:start'; });
+            var hasNative = entries.some(function(e) { return e.kind && e.kind.startsWith('native:'); });
+            var hasInteraction = entries.some(function(e) { return e.kind === 'interaction'; });
+            if (handlers.length > 0 && !hasNative && handlers.every(function(h) { return h.eventName === 'loaded'; })) { toMerge.push(traceId); return; }
+            if (handlers.length === 0 && !hasNative && !hasInteraction && entries.length > 0 && entries.every(function(e) { return e.kind === 'method:call' && e.componentLabel === 'state'; })) { toMerge.push(traceId); return; }
+          });
+          toMerge.forEach(function(traceId) {
+            tracesMap.get(traceId).forEach(function(e) { if (e.kind !== 'interaction') startupEntries.push(e); });
+            tracesMap.delete(traceId);
+          });
+          if (startupTraceId === 'startup-synthetic' && startupEntries.length === 0) tracesMap.delete(startupTraceId);
+        }
+        function mergeChangeListenerOrphans(tracesMap, orphans) {
+          var orphanedApiEvents = orphans.filter(function(e) {
+            return (e.kind === 'api:start' || e.kind === 'api:complete' || e.kind === 'api:error') && e.instanceId && typeof e.perfTs === 'number';
+          });
+          if (orphanedApiEvents.length === 0) return orphans;
+          var orphanedByInstance = new Map();
+          orphanedApiEvents.forEach(function(e) {
+            if (!orphanedByInstance.has(e.instanceId)) orphanedByInstance.set(e.instanceId, []);
+            orphanedByInstance.get(e.instanceId).push(e);
+          });
+          tracesMap.forEach(function(traceEntries, traceId) {
+            if (!traceId.startsWith('t-')) return;
+            var hasChangeListener = traceEntries.some(function(e) { return e.kind === 'handler:start' && e.componentType === 'ChangeListener'; });
+            if (!hasChangeListener) return;
+            var perfTimestamps = traceEntries.filter(function(e) { return typeof e.perfTs === 'number'; }).map(function(e) { return e.perfTs; });
+            var traceMinTs = Math.min.apply(null, perfTimestamps.length > 0 ? perfTimestamps : [Infinity]);
+            if (!isFinite(traceMinTs)) return;
+            orphanedByInstance.forEach(function(apiEvents, instanceId) {
+              var apiComplete = apiEvents.find(function(e) { return e.kind === 'api:complete'; });
+              if (!apiComplete) return;
+              var timeDiff = traceMinTs - apiComplete.perfTs;
+              if (timeDiff >= 0 && timeDiff <= 100) {
+                apiEvents.forEach(function(e) { e._mergedFromOrphan = true; traceEntries.push(e); });
+                orphanedByInstance.delete(instanceId);
+              }
+            });
+          });
+          return orphans.filter(function(e) { return !e._mergedFromOrphan; });
+        }
+        function rehomeByTimeWindow(tracesMap, orphans, opts) {
+          opts = opts || {};
+          var buffer = opts.buffer !== undefined ? opts.buffer : 500;
+          var filter = opts.filter || isUserActionEvent;
+          var sourceTraceId = opts.sourceTraceId || null;
+          var windows = [];
+          tracesMap.forEach(function(entries, traceId) {
+            if (!traceId.startsWith('i-')) return;
+            var starts = entries.filter(function(e) { return e.kind === 'handler:start' && typeof e.perfTs === 'number'; });
+            var completes = entries.filter(function(e) { return e.kind === 'handler:complete' && typeof e.perfTs === 'number'; });
+            if (starts.length === 0 || completes.length === 0) return;
+            windows.push({ traceId: traceId, entries: entries, startTs: Math.min.apply(null, starts.map(function(e) { return e.perfTs; })), endTs: Math.max.apply(null, completes.map(function(e) { return e.perfTs; })) });
+          });
+          if (windows.length === 0) return orphans;
+          if (sourceTraceId && tracesMap.has(sourceTraceId)) {
+            var sourceEntries = tracesMap.get(sourceTraceId);
+            var movedFromSource = [];
+            sourceEntries.forEach(function(e) {
+              if (typeof e.perfTs !== 'number' || !filter(e)) return;
+              for (var i = 0; i < windows.length; i++) {
+                var win = windows[i];
+                if (e.perfTs >= win.startTs && e.perfTs <= win.endTs + buffer) { e._movedFromStartup = true; win.entries.push(e); movedFromSource.push(e); break; }
+              }
+            });
+            if (movedFromSource.length > 0) {
+              var movedSet = new Set(movedFromSource);
+              tracesMap.set(sourceTraceId, sourceEntries.filter(function(e) { return !movedSet.has(e); }));
+            }
+          }
+          var moved = new Set();
+          orphans.forEach(function(e) {
+            if (typeof e.perfTs !== 'number' || !filter(e)) return;
+            for (var i = 0; i < windows.length; i++) {
+              var win = windows[i];
+              if (e.perfTs >= win.startTs && e.perfTs <= win.endTs + buffer) { e._mergedByTimeWindow = true; win.entries.push(e); moved.add(e); break; }
+            }
+          });
+          return orphans.filter(function(e) { return !moved.has(e); });
+        }
+        function mergeOrphanedPollingToStartup(tracesMap, orphans) {
+          var startupTraceId = null;
+          tracesMap.forEach(function(_, tid) { if (tid.startsWith('startup-')) startupTraceId = tid; });
+          if (!startupTraceId || !tracesMap.has(startupTraceId)) return orphans;
+          var startupEntries = tracesMap.get(startupTraceId);
+          var remaining = [];
+          orphans.forEach(function(e) {
+            if (isOrphanedPollingEvent(e)) { e._mergedToStartup = true; startupEntries.push(e); }
+            else { remaining.push(e); }
+          });
+          return remaining;
+        }
+        function filterPollingFromInteractions(tracesMap) {
+          tracesMap.forEach(function(entries, traceId) {
+            if (traceId.startsWith('i-')) tracesMap.set(traceId, entries.filter(function(e) { return !isPollingEvent(e); }));
+          });
+        }
+        function preprocessTraces(entries, sortKeyFn) {
+          sortKeyFn = sortKeyFn || defaultSortKey;
+          matchApiPairs(entries);
+          var grouped = groupByTraceId(entries);
+          var tracesMap = grouped.tracesMap, orphans = grouped.orphans;
+          var startupTraceId = findOrCreateStartupTraceId(tracesMap);
+          orphans = mergeBootstrapOrphans(tracesMap, orphans, sortKeyFn);
+          mergePollingTraces(tracesMap);
+          orphans = mergeChangeListenerOrphans(tracesMap, orphans);
+          var currentStartupId = null;
+          tracesMap.forEach(function(_, tid) { if (tid.startsWith('startup-')) currentStartupId = tid; });
+          orphans = rehomeByTimeWindow(tracesMap, orphans, { buffer: 500, sourceTraceId: currentStartupId });
+          orphans = mergeOrphanedPollingToStartup(tracesMap, orphans);
+          filterPollingFromInteractions(tracesMap);
+          return { tracesMap: tracesMap, orphans: orphans, startupTraceId: currentStartupId };
+        }
+        window.TraceNormalize = { preprocessTraces: preprocessTraces, resetRequestIdCounter: resetRequestIdCounter };
+      })();
+      // ---- END trace-normalize ----
+    </script>
     <script type="module">
       import * as jsondiffpatch from "https://unpkg.com/jsondiffpatch@0.7.3/lib/index.js";
       import * as htmlFormatter from "https://unpkg.com/jsondiffpatch@0.7.3/lib/formatters/html.js";
       import { XmluiSource } from "./xmlui-parser.es.js";
+      const TN = window.TraceNormalize;
 
       // =============================================================================
       // LOCALSTORAGE PERSISTENCE - Survive server restarts
@@ -2636,10 +2890,21 @@
           let label = "";
           const compName = e.componentLabel || e.component || "";
           const ariaTag = e.ariaName ? ` [${e.ariaName}]` : "";
-          if (compName && e.displayLabel) {
-            label = `${compName}${ariaTag} "${e.displayLabel}"`;
-          } else if (e.displayLabel) {
-            label = `"${e.displayLabel}"`;
+          // Truncate method:call displayLabels that contain full state payloads
+          let displayLabel = e.displayLabel || "";
+          if (e.kind === "method:call" && displayLabel.length > 120) {
+            // Show method name + truncated args: "state.update({status:true,sessions:[],...})"
+            const parenIdx = displayLabel.indexOf("(");
+            if (parenIdx !== -1) {
+              displayLabel = displayLabel.substring(0, Math.min(parenIdx + 80, displayLabel.length)) + "…)";
+            } else {
+              displayLabel = displayLabel.substring(0, 120) + "…";
+            }
+          }
+          if (compName && displayLabel) {
+            label = `${compName}${ariaTag} "${displayLabel}"`;
+          } else if (displayLabel) {
+            label = `"${displayLabel}"`;
           } else if (compName) {
             label = compName + ariaTag;
           }
@@ -2860,403 +3125,17 @@
         return result;
       }
 
-      // Counter for generating unique request IDs
-      let _requestIdCounter = 0;
-
       function processAllEntries(entries) {
-        // NOTE: We intentionally do NOT pre-assign traceIds to orphaned api:complete events.
-        // The old approach used the LAST api:start's traceId for ALL orphans, which caused
-        // wrong matching when a DataSource makes multiple requests over time.
-        // Instead, we rely on timing-based matching below to find the correct api:start,
-        // then inherit its traceId.
-
-        // Assign unique requestId to each API request lifecycle
-        // This disambiguates multiple requests from the same DataSource (instanceId)
-        // Also store traceId so we can correctly group api:complete with its api:start
-        const pendingRequests = new Map(); // instanceId -> queue of {requestId, perfTs, method, url, traceId}
-        entries.forEach((e) => {
-          if (e.kind === "api:start") {
-            // Don't reassign if already has requestId (from previous processing)
-            if (!e._requestId) {
-              e._requestId = `req-${++_requestIdCounter}`;
-            }
-            const requestId = e._requestId;
-            const key = e.instanceId || "unknown";
-            if (!pendingRequests.has(key)) pendingRequests.set(key, []);
-            pendingRequests.get(key).push({
-              requestId,
-              perfTs: e.perfTs,
-              method: (e.method || "GET").toUpperCase(), // Normalize case for matching
-              url: e.url,
-              traceId: e.traceId, // Store traceId for inheritance
-            });
-          }
-        });
-
-        // Match api:complete and api:error to pending requests by method+url+timing+traceId
-        // Also inherit the correct traceId from the matched api:start
-        // IMPORTANT: Process completions in chronological order so earlier completions
-        // get matched to earlier starts (prevents later completion from "stealing" a match)
-        const apiCompletions = entries
-          .filter((e) => (e.kind === "api:complete" || e.kind === "api:error") && !e._requestId)
-          .sort((a, b) => (a.perfTs || 0) - (b.perfTs || 0));
-
-        apiCompletions.forEach((e) => {
-            const key = e.instanceId || "unknown";
-            const queue = pendingRequests.get(key);
-            if (queue && queue.length > 0) {
-              const method = (e.method || "GET").toUpperCase(); // Normalize case for matching
-              const completePerfTs = e.perfTs || Infinity;
-              const completeTraceId = e.traceId; // May be undefined
-
-              // Find the best match: same method+url+traceId, started before completion, most recent start time
-              let bestMatchIdx = -1;
-              let bestMatchPerfTs = -1;
-
-              queue.forEach((r, idx) => {
-                if (r.method === method && r.url === e.url) {
-                  // If completion has traceId, require matching traceId
-                  if (completeTraceId && r.traceId && r.traceId !== completeTraceId) {
-                    return; // Skip - traceId mismatch
-                  }
-                  // Match must have started before (or at same time as) completion
-                  if (r.perfTs <= completePerfTs && r.perfTs > bestMatchPerfTs) {
-                    bestMatchIdx = idx;
-                    bestMatchPerfTs = r.perfTs;
-                  }
-                }
-              });
-
-              if (bestMatchIdx !== -1) {
-                const matched = queue.splice(bestMatchIdx, 1)[0];
-                e._requestId = matched.requestId;
-                // Always use matched api:start's traceId (overrides any pre-pass inheritance)
-                // If matched has no traceId, clear any incorrect one from pre-pass
-                e.traceId = matched.traceId || undefined;
-              } else {
-                // Fallback: take the most recent pending request with matching traceId (if any)
-                let fallbackIdx = -1;
-                let fallbackPerfTs = -1;
-                queue.forEach((r, idx) => {
-                  // Prefer same traceId, or any if no traceId match
-                  const traceMatch = !completeTraceId || !r.traceId || r.traceId === completeTraceId;
-                  if (traceMatch && r.perfTs > fallbackPerfTs) {
-                    fallbackIdx = idx;
-                    fallbackPerfTs = r.perfTs;
-                  }
-                });
-                if (fallbackIdx === -1) fallbackIdx = 0; // Last resort: first in queue
-                const matched = queue.splice(fallbackIdx, 1)[0];
-                e._requestId = matched.requestId;
-                // Always use matched api:start's traceId (overrides any pre-pass inheritance)
-                e.traceId = matched.traceId || undefined;
-              }
-            }
-        });
-
-        const interactions = entries.filter((e) => e.kind === "interaction" && !e.traceId);
+        // Shared preprocessing: API pair matching, trace grouping, orphan re-homing,
+        // polling merge/filter. See trace-normalize.js for the pipeline.
         const nonInteractions = entries.filter((e) => e.kind !== "interaction" || e.traceId);
+        const result = TN.preprocessTraces(nonInteractions, sortKey);
+        const tracesMap = result.tracesMap;
+        let orphans = result.orphans;
+        const startupTraceId = result.startupTraceId;
 
-        const tracesMap = new Map();
-        let orphans = [];
-        nonInteractions.forEach((entry) => {
-          if (entry.traceId) {
-            if (!tracesMap.has(entry.traceId)) tracesMap.set(entry.traceId, []);
-            tracesMap.get(entry.traceId).push(entry);
-          } else {
-            orphans.push(entry);
-          }
-        });
-
-        // Find startup trace and merge bootstrap orphans into it
-        // If no startup trace exists, create a synthetic one to collect orphaned polling events
-        let startupTraceId = Array.from(tracesMap.keys()).find(id => id.startsWith("startup-"));
-        if (!startupTraceId) {
-          // Create synthetic startup trace
-          startupTraceId = "startup-synthetic";
-          tracesMap.set(startupTraceId, []);
-        }
-        {
-          const startupEntries = tracesMap.get(startupTraceId);
-          const startupMinTs = Math.min(...startupEntries.map(e => sortKey(e) || Infinity));
-
-          // Bootstrap orphans: state changes that occurred before or at startup start
-          const bootstrapOrphans = orphans.filter(e => {
-            const ts = sortKey(e);
-            // Include if: no timestamp (init events), or timestamp <= startup start + small buffer
-            return ts === 0 || ts <= startupMinTs + 100;
-          });
-
-          // Mark and add bootstrap events to startup trace
-          bootstrapOrphans.forEach(e => {
-            e._bootstrap = true;
-            startupEntries.push(e);
-          });
-
-          // Remove bootstrap orphans from orphans list
-          orphans = orphans.filter(e => !e._bootstrap);
-
-          // Note: We previously had "incidental interaction" merging here, but it was too aggressive.
-          // A user clicking "Save" should still show as a trace even if the handler is on "settingsForm".
-          // Now we only merge polling-only traces (where ALL handlers are "loaded").
-
-          // Merge "polling-only" traces into Startup
-          // These are traces where the only handlers are "loaded" handlers (from DataSource polling)
-          // and there's no meaningful user-triggered handler
-          const pollingTracesToMerge = [];
-          for (const [traceId, traceEntries] of tracesMap.entries()) {
-            if (traceId === startupTraceId) continue;
-
-            // Get all handler:start events
-            const handlers = traceEntries.filter(e => e.kind === "handler:start");
-            const hasNativeEvents = traceEntries.some(e => e.kind?.startsWith("native:"));
-            if (handlers.length === 0 && !hasNativeEvents) {
-              // Trace with no handlers and no native events - skip (might be interaction-only)
-              continue;
-            }
-
-            // Check if ALL handlers are "loaded" handlers (polling)
-            // But don't merge native-event traces — they represent real user interactions
-            const allAreLoaded = handlers.length > 0 && handlers.every(h => h.eventName === "loaded");
-            if (allAreLoaded && !hasNativeEvents) {
-              pollingTracesToMerge.push(traceId);
-            }
-          }
-
-          // Merge polling traces into Startup
-          pollingTracesToMerge.forEach(traceId => {
-            const entries = tracesMap.get(traceId);
-            entries.forEach(e => {
-              if (e.kind !== "interaction") {
-                startupEntries.push(e);
-              }
-            });
-            tracesMap.delete(traceId);
-          });
-
-          // Remove synthetic startup if it ended up empty
-          if (startupTraceId === "startup-synthetic" && startupEntries.length === 0) {
-            tracesMap.delete(startupTraceId);
-          }
-        }
-
-        // Merge orphaned API events into ChangeListener traces they triggered
-        // When a DataSource refetch (api:start/api:complete without traceId) triggers a ChangeListener,
-        // the ChangeListener gets a t- trace but the API events are orphaned. Merge them together.
-        const orphanedApiEvents = orphans.filter(e =>
-          (e.kind === "api:start" || e.kind === "api:complete" || e.kind === "api:error") &&
-          e.instanceId &&
-          typeof e.perfTs === "number"
-        );
-
-        if (orphanedApiEvents.length > 0) {
-          // Group orphaned API events by instanceId
-          const orphanedByInstance = new Map();
-          orphanedApiEvents.forEach(e => {
-            if (!orphanedByInstance.has(e.instanceId)) orphanedByInstance.set(e.instanceId, []);
-            orphanedByInstance.get(e.instanceId).push(e);
-          });
-
-          // For each t- trace with a ChangeListener, check if orphaned API events triggered it
-          for (const [traceId, traceEntries] of tracesMap.entries()) {
-            if (!traceId.startsWith("t-")) continue;
-
-            // Check if this trace has a ChangeListener handler
-            const hasChangeListener = traceEntries.some(e =>
-              e.kind === "handler:start" && e.componentType === "ChangeListener"
-            );
-            if (!hasChangeListener) continue;
-
-            // Find the earliest timestamp in this trace
-            const traceMinTs = Math.min(...traceEntries.filter(e => typeof e.perfTs === "number").map(e => e.perfTs));
-            if (!isFinite(traceMinTs)) continue;
-
-            // Look for orphaned api:complete events that happened within 100ms before the trace started
-            for (const [instanceId, apiEvents] of orphanedByInstance.entries()) {
-              const apiComplete = apiEvents.find(e => e.kind === "api:complete");
-              if (!apiComplete) continue;
-
-              // Check if api:complete happened shortly before this trace started (within 100ms)
-              const timeDiff = traceMinTs - apiComplete.perfTs;
-              if (timeDiff >= 0 && timeDiff <= 100) {
-                // Merge these API events into the trace
-                apiEvents.forEach(e => {
-                  e._mergedFromOrphan = true;
-                  traceEntries.push(e);
-                });
-                // Remove from orphans
-                orphanedByInstance.delete(instanceId);
-              }
-            }
-          }
-
-          // Remove merged orphans from the orphans list
-          orphans = orphans.filter(e => !e._mergedFromOrphan);
-        }
-
-        // Time-based association: Move events from Startup/orphans into interaction traces
-        // when they fall within the handler's time window (between handler:start and handler:complete)
-        // This handles cases like confirm dialogs where the API call happens after user confirms
-        // but gets the startup traceId instead of the interaction traceId
-
-        // Helper to check if an event should be moved to an interaction trace
-        const isUserActionEvent = (e) => {
-          // API events (non-status, non-license polling)
-          if ((e.kind === "api:start" || e.kind === "api:complete" || e.kind === "api:error")) {
-            if (e.url && (e.url.includes("/status") || e.url.includes("/license"))) return false;
-            return true;
-          }
-          // State changes for user data (not serverInfo/polling)
-          if (e.kind === "state:changes") {
-            if (e.eventName === "DataSource:serverInfo") return false;
-            if (e.eventName?.startsWith("AppState:")) {
-              const isPolling = e.diffJson?.every(d =>
-                d.path === "stats" || d.path?.startsWith("stats.") ||
-                d.path === "status" || d.path === "logs" || d.path === "sessions"
-              );
-              if (isPolling) return false;
-            }
-            return true;
-          }
-          // Component variable changes (e.g., items array in Users component)
-          if (e.kind === "component:vars:change") {
-            // Skip serverStatus changes (polling-driven)
-            if (e.diff?.some(d => d.path === "serverStatus")) return false;
-            return true;
-          }
-          return false;
-        };
-
-        // First pass: collect interaction trace time windows
-        const interactionWindows = [];
-        for (const [traceId, traceEntries] of tracesMap.entries()) {
-          if (!traceId.startsWith("i-")) continue;
-
-          const handlerStarts = traceEntries.filter(e => e.kind === "handler:start" && typeof e.perfTs === "number");
-          const handlerCompletes = traceEntries.filter(e => e.kind === "handler:complete" && typeof e.perfTs === "number");
-
-          if (handlerStarts.length === 0 || handlerCompletes.length === 0) continue;
-
-          const traceStartTs = Math.min(...handlerStarts.map(e => e.perfTs));
-          const traceEndTs = Math.max(...handlerCompletes.map(e => e.perfTs));
-
-          interactionWindows.push({ traceId, traceEntries, traceStartTs, traceEndTs });
-        }
-
-        // Second pass: move events from Startup trace into interaction traces
-        const startupTraceEntries = tracesMap.get(startupTraceId);
-        if (startupTraceEntries && interactionWindows.length > 0) {
-          const eventsToMove = [];
-
-          startupTraceEntries.forEach(e => {
-            if (typeof e.perfTs !== "number") return;
-            if (!isUserActionEvent(e)) return;
-
-            // Find an interaction trace whose window contains this event
-            // Add small buffer after handler:complete for state changes that arrive just after
-            for (const win of interactionWindows) {
-              if (e.perfTs >= win.traceStartTs && e.perfTs <= win.traceEndTs + 500) {
-                eventsToMove.push({ event: e, targetTrace: win.traceEntries });
-                break;
-              }
-            }
-          });
-
-          // Move the events
-          eventsToMove.forEach(({ event, targetTrace }) => {
-            event._movedFromStartup = true;
-            targetTrace.push(event);
-          });
-
-          // Remove moved events from startup
-          if (eventsToMove.length > 0) {
-            const movedSet = new Set(eventsToMove.map(m => m.event));
-            tracesMap.set(startupTraceId, startupTraceEntries.filter(e => !movedSet.has(e)));
-          }
-        }
-
-        // Also check orphans (events with no traceId at all)
-        for (const win of interactionWindows) {
-          const orphansInWindow = orphans.filter(e => {
-            if (typeof e.perfTs !== "number") return false;
-            if (e.perfTs < win.traceStartTs || e.perfTs > win.traceEndTs + 500) return false;
-            return isUserActionEvent(e);
-          });
-
-          orphansInWindow.forEach(e => {
-            e._mergedByTimeWindow = true;
-            win.traceEntries.push(e);
-          });
-        }
-
-        // Remove time-window merged orphans from the orphans list
-        orphans = orphans.filter(e => !e._mergedByTimeWindow);
-
-        // Merge remaining orphaned polling events into Startup
-        // This includes API events, "loaded" handlers, and DataSource state changes
-        const startupEntries = tracesMap.get(startupTraceId);
-        if (startupEntries) {
-          // Only merge orphaned events that look like polling, not user actions
-          // Be selective: only merge "loaded" handlers and status polling, not all DataSource events
-          const pollingOrphans = orphans.filter(e => {
-            // "loaded" handlers (from DataSource polling)
-            if ((e.kind === "handler:start" || e.kind === "handler:complete") && e.eventName === "loaded") {
-              return true;
-            }
-            // Status polling API events
-            if ((e.kind === "api:start" || e.kind === "api:complete") && e.url && e.url.includes("/status")) {
-              return true;
-            }
-            // DataSource:serverInfo state changes (polling)
-            if (e.kind === "state:changes" && e.eventName === "DataSource:serverInfo") {
-              return true;
-            }
-            // AppState changes that are likely from polling (only if diff is stats-related)
-            if (e.kind === "state:changes" && e.eventName && e.eventName.startsWith("AppState:")) {
-              const isPollingChange = e.diffJson?.every(d =>
-                d.path === "stats" || d.path?.startsWith("stats.") ||
-                d.path === "status" || d.path === "logs" || d.path === "sessions"
-              );
-              if (isPollingChange) return true;
-            }
-            return false;
-          });
-          pollingOrphans.forEach(e => {
-            e._mergedToStartup = true;
-            startupEntries.push(e);
-          });
-          orphans = orphans.filter(e => !e._mergedToStartup);
-        }
-
-        // Filter polling events from interaction traces
-        // These get the interaction traceId when they happen during handler execution
-        // (e.g., serverInfo polling while waiting for confirm dialog)
-        const isPollingEvent = (e) => {
-          // serverInfo state changes
-          if (e.kind === "state:changes" && e.eventName === "DataSource:serverInfo") return true;
-          // status API calls
-          if ((e.kind === "api:start" || e.kind === "api:complete") && e.url?.includes("/status")) return true;
-          // loaded handlers for serverInfo
-          if ((e.kind === "handler:start" || e.kind === "handler:complete") &&
-              e.eventName === "loaded" && e.componentLabel === "serverInfo") return true;
-          // AppState polling changes
-          if (e.kind === "state:changes" && e.eventName?.startsWith("AppState:")) {
-            const isPolling = e.diffJson?.every(d =>
-              d.path === "stats" || d.path?.startsWith("stats.") ||
-              d.path === "status" || d.path === "logs" || d.path === "sessions"
-            );
-            if (isPolling) return true;
-          }
-          return false;
-        };
-
-        for (const [traceId, traceEntries] of tracesMap.entries()) {
-          // For interaction traces, filter out polling noise
-          if (traceId.startsWith("i-")) {
-            const filtered = traceEntries.filter(e => !isPollingEvent(e));
-            tracesMap.set(traceId, filtered);
-          }
-        }
+        // Viewer-specific: pull standalone interactions (no traceId) for timeline display
+        const interactions = entries.filter((e) => e.kind === "interaction" && !e.traceId);
 
         const processedTraces = [];
         for (const [traceId, traceEntries] of tracesMap.entries()) {
@@ -3302,7 +3181,7 @@
           otherOrphans: otherOrphans.map((e) => {
             // Build title - include URL for API events
             let title = e.kind;
-            if (e.displayLabel) title += ` ${e.displayLabel}`;
+            if (e.displayLabel) title += ` ${e.displayLabel.length > 120 ? e.displayLabel.substring(0, 120) + "…" : e.displayLabel}`;
             else if (e.eventName) title += ` ${e.eventName}`;
             else if (e.url) title += ` ${normalizeMethod(e.method)} ${normalizeUrl(e.url)}`;
             if (typeof e.offsetX === "number") {
@@ -4571,7 +4450,7 @@
         if (window.parent && window.parent._xsLogs) window.parent._xsLogs.length = 0;
         clearStoredEntries(); // Also clear localStorage
         lastStoredCount = 0; // Reset storage counter
-        _requestIdCounter = 0; // Reset counter for fresh numbering
+        TN.resetRequestIdCounter(); // Reset counter for fresh numbering
         render();
       });
 
