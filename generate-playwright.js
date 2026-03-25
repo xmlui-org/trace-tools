@@ -1298,7 +1298,13 @@ function generateApiResultAssertions(captures, indent, endpointHistory) {
 
     const bodyVar = `body_${varName}`;
     const responseRef = resolvedVar || varName;
-    lines.push(`${indent}const ${bodyVar} = await ${responseRef}.json();`);
+    // If no resolvedVar, the promise was awaited but the resolved response
+    // wasn't captured. Re-await to get the Response object for .json().
+    if (!resolvedVar) {
+      lines.push(`${indent}const ${bodyVar} = await (await ${responseRef}).json();`);
+    } else {
+      lines.push(`${indent}const ${bodyVar} = await ${responseRef}.json();`);
+    }
 
     if (apiResult.type === 'snapshot') {
       // Assert shape (keys exist) rather than exact values, which are
@@ -1311,13 +1317,14 @@ function generateApiResultAssertions(captures, indent, endpointHistory) {
     } else if (apiResult.type === 'rowcount') {
       const prev = endpointHistory && path ? endpointHistory.get(path) : null;
       if (prev && apiResult.count != null) {
-        // Repeated endpoint: assert transition direction
+        // Repeated endpoint: assert transition direction using baseline counts
+        // (avoids cross-step variable scoping issues with test.step closures)
         if (apiResult.count > prev.count) {
-          lines.push(`${indent}expect(${bodyVar}.length).toBeGreaterThan(${prev.bodyVar}.length);`);
+          lines.push(`${indent}expect(${bodyVar}.length).toBeGreaterThan(${prev.count});`);
         } else if (apiResult.count < prev.count) {
-          lines.push(`${indent}expect(${bodyVar}.length).toBeLessThan(${prev.bodyVar}.length);`);
+          lines.push(`${indent}expect(${bodyVar}.length).toBeLessThan(${prev.count});`);
         } else {
-          lines.push(`${indent}expect(${bodyVar}.length).toBe(${prev.bodyVar}.length);`);
+          lines.push(`${indent}expect(${bodyVar}.length).toBe(${prev.count});`);
         }
       } else {
         // First occurrence: assert non-empty
