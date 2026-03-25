@@ -2476,12 +2476,17 @@
             traceEntries.find((e) => e.kind === "native:click" || e.kind === "native:dblclick") ||
             traceEntries.find((e) => e.kind?.startsWith("native:"));
           if (interaction) {
-            const label = interaction.componentLabel || interaction.uid || "Unknown";
-            const action = interaction.interaction || interaction.eventName || "";
-            const detailTextContent = interaction.detail?.text;
+            // Prefer interaction with ariaRole over bare clicks (e.g. Select option vs trigger)
+            const interactions = traceEntries.filter((e) => e.kind === "interaction");
+            const preferred = interactions.find((e) => e.ariaRole && e.ariaRole !== "banner" && e.ariaRole !== "tabpanel") || interaction;
+            const label = preferred.componentLabel || preferred.uid || "Unknown";
+            const action = preferred.interaction || preferred.eventName || "";
+            const detailTextContent = preferred.detail?.text;
             const hasOnlyTag = /^[a-z]+$/.test(label);
             const contextText = hasOnlyTag && detailTextContent && detailTextContent.length < 40 ? ` "${detailTextContent}"` : "";
-            componentText = action ? `${label}${contextText} ${action}` : label + contextText;
+            // Prefix with Select's aria-label if this is an option selection
+            const selectPrefix = preferred.selectAriaLabel ? `Select "${preferred.selectAriaLabel}" → ` : "";
+            componentText = selectPrefix + (action ? `${label}${contextText} ${action}` : label + contextText);
             // If there's also a native event with a displayLabel, append it
             if (nativeEvent && nativeEvent.displayLabel) {
               componentText += ` → "${nativeEvent.displayLabel}"`;
@@ -2611,6 +2616,7 @@
             // DataSource state:changes before first handler - show where time is going
             if (e.kind === "state:changes" && e.componentType === "DataSource" && e.perfTs < firstHandlerTs) {
               const dsName = e.uid || e.dataSourceId || "DataSource";
+              if (dsName.includes("undefined_data_")) return;
               const duration = e.perfTs - lastEventTs;
               if (duration > 100) { // Only show gaps > 100ms
                 timelineBreakdown.push({ phase: `DataSource:${dsName}`, duration, perfTs: e.perfTs, order: timelineOrder++ });
@@ -2790,6 +2796,8 @@
 
           if (e.kind === "state:changes") {
             if (isNoopStateChange(e)) { dedupedCount += 1; return; }
+            // Skip internal DataSource events (Items without explicit component id)
+            if (e.eventName && e.eventName.includes("undefined_data_")) { dedupedCount += 1; return; }
 
             // Check for polling pattern - same eventName with same diff structure
             const eventName = e.eventName || e.uid || "state:changes";
