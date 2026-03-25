@@ -682,16 +682,17 @@ function extractStepFromJsonLogs(trace) {
       }
       return entry;
     });
-  // Deduplicate by method + endpoint (base path without query)
-  const apiSeen = new Set();
-  const apiCalls = [];
+  // Deduplicate by method + endpoint (base path without query).
+  // Prefer api:complete (has apiResult) over api:start when both exist.
+  const apiByKey = new Map();
   for (const api of rawApiCalls) {
     const key = `${api.method} ${(api.endpoint || '').split('?')[0]}`;
-    if (!apiSeen.has(key)) {
-      apiSeen.add(key);
-      apiCalls.push(api);
+    const existing = apiByKey.get(key);
+    if (!existing || (api.apiResult && !existing.apiResult)) {
+      apiByKey.set(key, api);
     }
   }
+  const apiCalls = Array.from(apiByKey.values());
   if (apiCalls.length > 0) {
     awaitConditions.api = apiCalls;
   }
