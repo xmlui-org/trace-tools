@@ -783,7 +783,16 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
       const fillName = step.target?.ariaName;
       const fillValue = step.fillValue || '';
       if (fillName) {
-        lines.push(`${indent}await page.getByRole('textbox', { name: '${esc(fillName)}' }).fill('${esc(fillValue)}');`);
+        // Dynamic labels (containing numbers) change between capture and replay.
+        // Use a regex matching the stable prefix before the first digit.
+        const hasDynamicNumber = /\d/.test(fillName);
+        if (hasDynamicNumber) {
+          const prefix = esc(fillName.replace(/\d.*/, '').trim());
+          lines.push(`${indent}await page.getByRole('textbox', { name: /${prefix}/i }).waitFor();`);
+          lines.push(`${indent}await page.getByRole('textbox', { name: /${prefix}/i }).fill('${esc(fillValue)}');`);
+        } else {
+          lines.push(`${indent}await page.getByRole('textbox', { name: '${esc(fillName)}' }).fill('${esc(fillValue)}');`);
+        }
       }
       break;
     }

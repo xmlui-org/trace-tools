@@ -348,24 +348,31 @@ function distillTrace(logs) {
     while (i < steps.length) {
       const step = steps[i];
 
-      if (step.action === 'keydown' && step.target?.ariaRole === 'textbox' && step.target?.ariaName) {
+      if (step.action === 'keydown' && step.target?.ariaRole === 'textbox' && (step.target?.ariaName || step.target?.componentId)) {
         const ariaName = step.target.ariaName;
         const componentId = step.target.componentId;
         const startTs = step._firstPerfTs || 0;
 
-        // Consume all consecutive keydowns on the same textbox
+        // Consume all consecutive keydowns on the same textbox.
+        // Match by componentId when available (handles dynamic aria-labels
+        // that change on each keystroke, e.g. "Search: N results").
         while (i < steps.length &&
                steps[i].action === 'keydown' &&
                steps[i].target?.ariaRole === 'textbox' &&
-               steps[i].target?.ariaName === ariaName) {
+               (componentId
+                 ? steps[i].target?.componentId === componentId
+                 : steps[i].target?.ariaName === ariaName)) {
           i++;
         }
         const endTs = steps[i - 1]._firstPerfTs || startTs;
 
-        // Find raw value:change events for this textbox in the time window
+        // Find raw value:change events for this textbox in the time window.
+        // Match by componentId, ariaName prefix (for dynamic labels), or
+        // time window alone when the textbox has no stable identifier.
         const relevantVCs = rawValueChanges.filter(vc => {
           const idMatch = (componentId && vc.componentLabel === componentId) ||
-                          vc.ariaName === ariaName;
+                          vc.ariaName === ariaName ||
+                          (ariaName && vc.ariaName && vc.ariaName.split(':')[0] === ariaName.split(':')[0]);
           return idMatch && vc.perfTs >= startTs && vc.perfTs <= endTs + 500;
         });
 

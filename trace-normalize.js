@@ -57,11 +57,10 @@ function isUserActionEvent(e) {
     }
     return true;
   }
-  // Component variable changes (e.g., items array in Users component)
-  if (e.kind === 'component:vars:change') {
-    if (e.diff && e.diff.some(function(d) { return d.path === 'serverStatus'; })) return false;
-    return true;
-  }
+  // Component variable changes
+  if (e.kind === 'component:vars:change') return true;
+  // Data bind events (Table/List row count changes from DataSource updates)
+  if (e.kind === 'data:bind') return true;
   return false;
 }
 

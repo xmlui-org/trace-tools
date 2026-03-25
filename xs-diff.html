@@ -784,10 +784,8 @@
             }
             return true;
           }
-          if (e.kind === 'component:vars:change') {
-            if (e.diff && e.diff.some(function(d) { return d.path === 'serverStatus'; })) return false;
-            return true;
-          }
+          if (e.kind === 'component:vars:change') return true;
+          if (e.kind === 'data:bind') return true;
           return false;
         }
         function isOrphanedPollingEvent(e) {
