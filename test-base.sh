@@ -22,13 +22,15 @@ RUNS="$APP_DIR/traces/runs"
 FIXTURES="$APP_DIR/traces/fixtures"
 VIDEOS="$APP_DIR/traces/videos"
 
-# Parse --video and --headless flags from any position
+# Parse --video, --headless, and --url=<baseURL> flags from any position
 ARGS=()
 for arg in "$@"; do
   if [ "$arg" = "--video" ]; then
     export PLAYWRIGHT_VIDEO=on
   elif [ "$arg" = "--headless" ]; then
     export PLAYWRIGHT_HEADLESS=on
+  elif [[ "$arg" == --url=* ]]; then
+    export BASE_URL="${arg#--url=}"
   else
     ARGS+=("$arg")
   fi

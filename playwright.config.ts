@@ -22,6 +22,7 @@ export default defineConfig({
     headless: !!process.env.CI || process.env.PLAYWRIGHT_HEADLESS === 'on', // headed by default; use --headless flag or set CI=1
     trace: 'on-first-retry',
     viewport: { width: 1440, height: 900 },
+    permissions: ['clipboard-read', 'clipboard-write'],
     ...(process.env.PLAYWRIGHT_VIDEO === 'on' ? { video: 'on' } : {}),
   },
   projects: [
