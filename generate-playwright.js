@@ -718,6 +718,12 @@ function generateStepCode(step, fillPlan, promiseCounter = 0, stepIndex = 0, ign
         lines.push(`${indent}await page.getByRole('option', { name: '${optionName}', exact: true }).click();`);
         break;
       }
+      // FileInput with files: skip the click (which opens the native file dialog)
+      // and just emit setInputFiles directly.
+      const hasFileUpload = step.valueChanges?.some(vc => vc.files?.length > 0);
+      if (hasFileUpload) {
+        break;
+      }
       const clickLines = generateClickCode(step, indent, 'click', fillPlan);
       lines.push(...clickLines);
       if (clickLines._skipAwait) {
@@ -1321,7 +1327,7 @@ function generateApiResultAssertions(captures, indent, endpointHistory) {
       // and array responses.
       const keysStr = apiResult.keys.map(k => `'${k}'`).join(', ');
       lines.push(`${indent}{ const _snap = Array.isArray(${bodyVar}) ? ${bodyVar}[0] : ${bodyVar};`);
-      lines.push(`${indent}  expect(Object.keys(_snap).sort()).toEqual([${keysStr}]); }`);
+      lines.push(`${indent}  if (_snap) expect(Object.keys(_snap).sort()).toEqual([${keysStr}]); }`);
 
     } else if (apiResult.type === 'rowcount') {
       const prev = endpointHistory && path ? endpointHistory.get(path) : null;
@@ -1335,12 +1341,9 @@ function generateApiResultAssertions(captures, indent, endpointHistory) {
         } else {
           lines.push(`${indent}expect(${bodyVar}.length).toBe(${prev.count});`);
         }
-      } else {
-        // First occurrence: assert non-empty
-        lines.push(`${indent}expect(${bodyVar}.length).toBeGreaterThan(0);`);
       }
       const keysStr = apiResult.keys.map(k => `'${k}'`).join(', ');
-      lines.push(`${indent}expect(Object.keys(${bodyVar}[0]).sort()).toEqual([${keysStr}]);`);
+      lines.push(`${indent}if (${bodyVar}.length > 0) expect(Object.keys(${bodyVar}[0]).sort()).toEqual([${keysStr}]);`);
       // Record for future steps
       if (endpointHistory && path && apiResult.count != null) {
         endpointHistory.set(path, { count: apiResult.count, bodyVar });

@@ -747,6 +747,31 @@ function extractStepFromJsonLogs(trace) {
     step.valueChanges = Array.from(byComponent.values());
   }
 
+  // Synthesize file metadata from FileInput handler logs when no value:change exists.
+  // FileInput doesn't emit value:change events, but its didChange handler args contain
+  // the file path which we need for Playwright's setInputFiles.
+  if (!step.valueChanges || !step.valueChanges.some(vc => vc.files)) {
+    for (const e of events) {
+      if (!e.text) continue;
+      try {
+        const parsed = JSON.parse(e.text);
+        if (!Array.isArray(parsed) || parsed[0] !== 'handler:start') continue;
+        const info = parsed[1];
+        if (info.componentType === 'FileInput' && info.eventName === 'didChange' && info.args) {
+          const fileList = Array.isArray(info.args[0]) ? info.args[0] : [];
+          const files = fileList.filter(f => f.path || f.name).map(f => ({
+            name: (f.path || f.name || '').replace(/^\.\//, '')
+          }));
+          if (files.length > 0) {
+            if (!step.valueChanges) step.valueChanges = [];
+            step.valueChanges.push({ component: 'FileInput', files });
+            break;
+          }
+        }
+      } catch (_) {}
+    }
+  }
+
   // Capture app:trace events — user-defined trace points emitted via pushXsLog.
   // Group by label, record the data sequence for transition-shape comparison.
   const appTraces = events.filter(e => e.kind === 'app:trace' && e.data);
