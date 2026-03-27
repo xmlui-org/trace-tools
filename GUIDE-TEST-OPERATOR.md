@@ -554,6 +554,18 @@ By default, tests run in a visible browser window (headed mode). Add `--headless
 
 The `--headless` flag sets `PLAYWRIGHT_HEADLESS=on` in the environment, which `playwright.config.ts` reads. The flags `--video` and `--headless` can be combined.
 
+## Custom base URL
+
+By default, Playwright opens the URL defined in `playwright.config.ts` (typically `http://localhost:5173`). Use `--url=` to point tests at a different server — useful for a non-default port or a staging environment:
+
+```bash
+./test.sh spec breadcrumb-navigate --url=http://localhost:8080
+./test.sh spec-all --url=http://staging.internal
+./test.sh run copy-paste-and-move --url=http://localhost:8080
+```
+
+The `--url=` flag sets `BASE_URL` in the environment, which `playwright.config.ts` reads as `baseURL`. It can be combined with `--video` and `--headless`.
+
 ## Reading the test output
 
 A test run produces several kinds of results:
