@@ -354,12 +354,15 @@ function distillTrace(logs) {
         const startTs = step._firstPerfTs || 0;
 
         // Consume all consecutive keydowns on the same textbox.
-        // Match by componentId when available (handles dynamic aria-labels
-        // that change on each keystroke, e.g. "Search: N results").
+        // Match by ariaName first (distinguishes fields in the same form).
+        // Fall back to componentId only for dynamic labels that change on
+        // each keystroke (e.g. "Search: N results").
+        const hasDynamicLabel = ariaName && ariaName.includes(':');
+        const matchByComponentId = !ariaName || hasDynamicLabel;
         while (i < steps.length &&
                steps[i].action === 'keydown' &&
                steps[i].target?.ariaRole === 'textbox' &&
-               (componentId
+               (matchByComponentId
                  ? steps[i].target?.componentId === componentId
                  : steps[i].target?.ariaName === ariaName)) {
           i++;
@@ -422,10 +425,12 @@ function distillTrace(logs) {
   // Coalesce consecutive value changes on the same target.
   // A slider drag via 10 ArrowRight presses produces 10 steps each with
   // valueChanges. Keep only the last one — we assert the final value.
+  // Only coalesce keydown actions — button clicks are distinct semantic actions
+  // (e.g. repeated form submits with different validation outcomes).
   const coalesced = [];
   for (let i = 0; i < deduped.length; i++) {
     const step = deduped[i];
-    if (step.valueChanges?.length > 0) {
+    if (step.valueChanges?.length > 0 && step.action === 'keydown') {
       // Look ahead: if the next step(s) are the same action on the same
       // target with valueChanges, skip this one in favor of the last.
       let j = i + 1;
