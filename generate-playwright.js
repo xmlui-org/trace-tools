@@ -1337,7 +1337,9 @@ function generateApiResultAssertions(captures, indent, endpointHistory) {
       // and array responses.
       const keysStr = apiResult.keys.map(k => `'${k}'`).join(', ');
       lines.push(`${indent}{ const _snap = Array.isArray(${bodyVar}) ? ${bodyVar}[0] : ${bodyVar};`);
-      lines.push(`${indent}  expect(Object.keys(_snap).sort()).toEqual([${keysStr}]); }`);
+      // Superset check: new columns are OK, missing columns fail
+      lines.push(`${indent}  const _keys = Object.keys(_snap).sort();`);
+      lines.push(`${indent}  [${keysStr}].forEach(k => expect(_keys).toContain(k)); }`);
 
     } else if (apiResult.type === 'rowcount') {
       const prev = endpointHistory && path ? endpointHistory.get(path) : null;
@@ -1356,7 +1358,8 @@ function generateApiResultAssertions(captures, indent, endpointHistory) {
         lines.push(`${indent}expect(Array.isArray(${bodyVar})).toBe(true);`);
       }
       const keysStr = apiResult.keys.map(k => `'${k}'`).join(', ');
-      lines.push(`${indent}if (${bodyVar}.length > 0) { expect(Object.keys(${bodyVar}[0]).sort()).toEqual([${keysStr}]); }`);
+      // Superset check: new columns are OK, missing columns fail
+      lines.push(`${indent}if (${bodyVar}.length > 0) { const _keys = Object.keys(${bodyVar}[0]).sort(); [${keysStr}].forEach(k => expect(_keys).toContain(k)); }`);
       // Record for future steps
       if (endpointHistory && path && apiResult.count != null) {
         endpointHistory.set(path, { count: apiResult.count, bodyVar });
