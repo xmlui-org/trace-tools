@@ -2896,16 +2896,14 @@
           let label = "";
           const compName = e.componentLabel || e.component || "";
           const ariaTag = e.ariaName ? ` [${e.ariaName}]` : "";
-          // Truncate method:call displayLabels that contain full state payloads
+          // For method:call, show just the method name in the header;
+          // full payload goes in an expandable detail block.
           let displayLabel = e.displayLabel || "";
-          if (e.kind === "method:call" && displayLabel.length > 120) {
-            // Show method name + truncated args: "state.update({status:true,sessions:[],...})"
+          let methodCallFullLabel = "";
+          if (e.kind === "method:call" && displayLabel.length > 60) {
+            methodCallFullLabel = displayLabel;
             const parenIdx = displayLabel.indexOf("(");
-            if (parenIdx !== -1) {
-              displayLabel = displayLabel.substring(0, Math.min(parenIdx + 80, displayLabel.length)) + "…)";
-            } else {
-              displayLabel = displayLabel.substring(0, 120) + "…";
-            }
+            displayLabel = parenIdx !== -1 ? displayLabel.substring(0, parenIdx) + "(…)" : displayLabel.substring(0, 60) + "…";
           }
           if (compName && displayLabel) {
             label = `${compName}${ariaTag} "${displayLabel}"`;
@@ -2923,6 +2921,7 @@
             entry: e, meta,
             eventTitle,
             label,
+            methodCallFullLabel,
           });
         });
 
@@ -3760,6 +3759,11 @@
             const dedupCount = e._dedupCount || 1;
             const dedupInfo = dedupCount > 1 ? ` <span class="badge-muted">\u00d7${dedupCount}</span>` : "";
             bodyHtml += `<div class="trace-event-header">${evt.eventTitle}${dedupInfo}${evt.label ? ` ${evt.label}` : ""}${bootstrapBadge}${metaInline}</div>`;
+
+            // Show method:call full payload in expandable detail
+            if (evt.methodCallFullLabel) {
+              bodyHtml += `<details><summary>Full call</summary><pre class="source-code">${evt.methodCallFullLabel.replace(/</g, "&lt;")}</pre></details>`;
+            }
 
             // Show XMLUI source expander for events that carry source info
             if (evt.meta.hasSource && evt.meta.resolvedFile) {
