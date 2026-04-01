@@ -1191,6 +1191,9 @@ function generateContextMenuCode(step, indent) {
     } else {
       lines.push(`${indent}await page.getByRole('${ariaRole}', { name: '${ariaName}', exact: true }).click(${opts});`);
     }
+  } else if (ariaName) {
+    // Element has aria-label but no semantic role — use getByLabel
+    lines.push(`${indent}await page.getByLabel('${ariaName}', { exact: true }).click(${opts});`);
   } else if (label) {
     lines.push(`${indent}await page.getByText('${label}', { exact: true }).click(${opts});`);
   } else {
