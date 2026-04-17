@@ -4,7 +4,8 @@ import * as path from 'path';
 
 const parentConfigPath = path.join(__dirname, '..', 'app-config.json');
 const localConfigPath = path.join(__dirname, 'app-config.json');
-const configPath = fs.existsSync(parentConfigPath) ? parentConfigPath : localConfigPath;
+const configPath = process.env.APP_CONFIG_PATH
+  || (fs.existsSync(parentConfigPath) ? parentConfigPath : localConfigPath);
 const storageStatePath = path.join(__dirname, '.auth-state.json');
 
 setup('authenticate', async ({ page }) => {

@@ -1,12 +1,13 @@
 import { defineConfig } from '@playwright/test';
 import * as fs from 'fs';
 
-// Load app config if present (check parent dir first, then local)
+// Load app config — APP_CONFIG_PATH env var takes priority, then parent dir, then local
 const parentConfigPath = '../app-config.json';
 const localConfigPath = './app-config.json';
-const appConfigPath = fs.existsSync(parentConfigPath) ? parentConfigPath : localConfigPath;
-const appConfig = fs.existsSync(appConfigPath)
-  ? JSON.parse(fs.readFileSync(appConfigPath, 'utf8'))
+const resolvedConfigPath = process.env.APP_CONFIG_PATH
+  || (fs.existsSync(parentConfigPath) ? parentConfigPath : localConfigPath);
+const appConfig = fs.existsSync(resolvedConfigPath)
+  ? JSON.parse(fs.readFileSync(resolvedConfigPath, 'utf8'))
   : {};
 
 const baseURL = process.env.BASE_URL || appConfig.baseURL || 'http://localhost:5173';
