@@ -6,7 +6,8 @@
 #
 # The app script may optionally define/override:
 #   TRACE_TOOLS      — path to trace-tools (default: $APP_DIR/trace-tools)
-#   SPECS_DIR      — path to spec files (default: $APP_DIR/traces/specs)
+#   TRACES_DIR       — path to the traces folder (default: $APP_DIR/traces)
+#   SPECS_DIR        — path to spec files (default: $TRACES_DIR/specs)
 #   reset_fixtures() — function to reset server state (default: no-op)
 #   pre_spec_hook()  — function called before spec runs, receives spec name as $1
 #                      (use for exporting env vars like MOCK_PATH)
@@ -16,11 +17,12 @@ SELF="$APP_DIR/test.sh"
 
 # Defaults for anything the app didn't set
 TRACE_TOOLS="${TRACE_TOOLS:-$APP_DIR/trace-tools}"
-SPECS_DIR="${SPECS_DIR:-$APP_DIR/traces/specs}"
-BASELINES="$APP_DIR/traces/baselines"
-RUNS="$APP_DIR/traces/runs"
-FIXTURES="$APP_DIR/traces/fixtures"
-VIDEOS="$APP_DIR/traces/videos"
+TRACES_DIR="${TRACES_DIR:-$APP_DIR/traces}"
+SPECS_DIR="${SPECS_DIR:-$TRACES_DIR/specs}"
+BASELINES="$TRACES_DIR/baselines"
+RUNS="$TRACES_DIR/runs"
+FIXTURES="$TRACES_DIR/fixtures"
+VIDEOS="$TRACES_DIR/videos"
 
 # Parse --video, --headless, and --url=<baseURL> flags from any position
 ARGS=()
