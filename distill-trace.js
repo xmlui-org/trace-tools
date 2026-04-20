@@ -757,6 +757,20 @@ function extractStepFromJsonLogs(trace) {
   // the file path which we need for Playwright's setInputFiles.
   if (!step.valueChanges || !step.valueChanges.some(vc => vc.files)) {
     for (const e of events) {
+      // Prefer structured fields (works with compact exports that strip 'text')
+      if (e.kind === 'handler:start' && e.componentType === 'FileInput' && e.eventName === 'didChange' && e.eventArgs) {
+        const fileList = Array.isArray(e.eventArgs[0]) ? e.eventArgs[0] : [];
+        const files = fileList.filter(f => f.path || f.name).map(f => ({
+          name: (f.path || f.name || '').replace(/^\.\//, '')
+        }));
+        if (files.length > 0) {
+          if (!step.valueChanges) step.valueChanges = [];
+          step.valueChanges.push({ component: 'FileInput', files });
+          break;
+        }
+        continue;
+      }
+      // Fallback: parse legacy 'text' field for older traces
       if (!e.text) continue;
       try {
         const parsed = JSON.parse(e.text);

@@ -7031,13 +7031,16 @@
           return;
         }
         const skipKeys = new Set(['_targetInst', '_debugOwner', '_debugSource', 'stateNode', 'nativeEvent', 'view', 'target', 'currentTarget', 'relatedTarget', '__reactFiber$', '__reactProps$']);
+        const stripKeys = new Set(['beforeJson', 'afterJson', 'diffText', 'text']);
         const jsonEntries = rawLogs.map(entry => {
           const seen = new WeakSet();
           return JSON.stringify(entry, (key, value) => {
             if (value instanceof Node || value instanceof Window) return undefined;
             if (typeof value === 'function') return undefined;
             if (skipKeys.has(key)) return undefined;
+            if (stripKeys.has(key)) return undefined;
             if (key.startsWith('__react')) return undefined;
+            if (key === 'diffPretty' && typeof value === 'string' && value.length > 200) return undefined;
             if (typeof value === 'object' && value !== null) {
               if (seen.has(value)) return '[circular]';
               seen.add(value);
