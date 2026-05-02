@@ -2455,11 +2455,23 @@
           const label = preferredStart.componentLabel || "";
           const uid = preferredStart.uid || "";
           const event = preferredStart.eventName || "";
+
+          // Optional human-readable summary contributed by the component:
+          // any eventArg that's an object with a string `description` field is
+          // surfaced after the type/event identifier. Lets components like
+          // xmlui-dnd-list say "Toronto moved from position 1 to position 3"
+          // without the Inspector having to know the component's semantics.
+          const eventArgs = Array.isArray(preferredStart.eventArgs) ? preferredStart.eventArgs : [];
+          const description = eventArgs
+            .map((a) => (a && typeof a === "object" && typeof a.description === "string") ? a.description : null)
+            .find((d) => d);
+
           const parts = [];
           if (type) parts.push(type);
           if (label) parts.push(`"${label}"`);
           else if (uid && uid !== event) parts.push(uid);
           if (event) parts.push(event);
+          if (description) parts.push(`— ${description}`);
           componentText = parts.join(" ");
         } else {
           const interaction = traceEntries.find((e) => e.kind === "interaction");
@@ -4723,6 +4735,7 @@
               perfTs: opts.perfTs || TestFramework.perfTs(),
               ownerFileId: opts.fileId,
               handlerCode: opts.handlerCode,
+              eventArgs: opts.eventArgs,
             };
           },
 
@@ -5928,6 +5941,47 @@
           ];
           const summary = buildTraceSummary(events);
           assertTrue(summary.behavioralEventCount > 0, "Native events should count as behavioral");
+        });
+
+        test("Native Events", "handler:start eventArgs.description appended to title", () => {
+          const traceId = TestFramework.interactionTraceId();
+          const events = [
+            TestFramework.events.handlerStart("reorder", {
+              traceId,
+              componentType: "XMLUIDndList.DndItems",
+              perfTs: 100,
+              eventArgs: [
+                ["toronto", "albany", "keene"],
+                {
+                  item: "keene",
+                  fromIndex: 2,
+                  toIndex: 0,
+                  description: "keene moved from position 3 to position 1",
+                },
+              ],
+            }),
+          ];
+          const summary = buildTraceSummary(events);
+          assertContains(summary.componentText, "XMLUIDndList.DndItems", "Should include component type");
+          assertContains(summary.componentText, "reorder", "Should include event name");
+          assertContains(summary.componentText, "keene moved from position 3 to position 1", "Should include eventArgs description");
+        });
+
+        test("Native Events", "handler:start without eventArgs.description omits suffix", () => {
+          const traceId = TestFramework.interactionTraceId();
+          const events = [
+            TestFramework.events.handlerStart("submit", {
+              traceId,
+              componentType: "Button",
+              componentLabel: "OK",
+              perfTs: 100,
+            }),
+          ];
+          const summary = buildTraceSummary(events);
+          assertContains(summary.componentText, "Button", "Should include type");
+          assertContains(summary.componentText, "submit", "Should include event");
+          // No description was provided, so the em-dash separator must not appear.
+          assertTrue(!summary.componentText.includes("—"), "Should not include em-dash without description");
         });
 
         // =========================================================================
