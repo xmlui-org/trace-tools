@@ -1088,10 +1088,16 @@ function generateClickCode(step, indent, method = 'click', fillPlan = {}, stepIn
   // sticky submit buttons drop out of sticky position and clear any fixed
   // app header that overlaps them.
   if (ariaRole === 'button' && ariaName) {
-    // Buttons inside repeating containers (List, Table) need .first() to avoid
-    // strict mode violations when multiple items share the same button label.
+    // Disambiguate duplicate-named buttons. Prefer the explicit nthMatch
+    // captured in the trace; fall back to .first() for repeating containers
+    // (List, Table) where strict mode would otherwise complain about multiple
+    // matches.
     const inList = step.target?.component === 'List' || step.target?.component === 'Table';
-    const locator = `page.getByRole('button', { name: '${ariaName}', exact: true })${inList ? '.first()' : ''}`;
+    const nthSuffix =
+      step.target?.nthMatch !== undefined
+        ? `.nth(${step.target.nthMatch})`
+        : (inList ? '.first()' : '');
+    const locator = `page.getByRole('button', { name: '${ariaName}', exact: true })${nthSuffix}`;
     lines.push(`${indent}await ${locator}.evaluate(node => {`);
     lines.push(`${indent}  let el = node.parentElement;`);
     lines.push(`${indent}  while (el && el !== document.documentElement) {`);
