@@ -1,0 +1,6 @@
+{
+  "appGlobals": {
+    "xsVerbose": true,
+    "xsVerboseLogMax": 500
+  }
+}

@@ -1,0 +1,90 @@
+<App name="Selection Test App">
+
+  <AppHeader>
+    <Icon name="cog" tooltip="Inspector" width="20px" height="20px" onClick="inspectorDialog.open()" />
+  </AppHeader>
+
+  <NavPanel>
+    <NavLink label="Table Selection" to="/" />
+    <NavLink label="Tree Selection" to="/tree" />
+  </NavPanel>
+
+  <Pages>
+
+    <Page url="/">
+      <VStack var.singleSel="" var.multiSel="" padding="$space-4" gap="$space-4">
+
+        <Heading level="h2" value="Single-Row Selection" />
+        <Text>Selected: {singleSel}</Text>
+        <Table
+          testId="single-select-table"
+          rowsSelectable="true"
+          enableMultiRowSelection="false"
+          onSelectionDidChange="(sel) => singleSel = sel.map(r => r.name).join(', ')"
+          data='{[
+            { id: 1, name: "Alice", role: "Engineer" },
+            { id: 2, name: "Bob", role: "Designer" },
+            { id: 3, name: "Carol", role: "Manager" },
+            { id: 4, name: "Dave", role: "Analyst" }
+          ]}'>
+          <Column bindTo="name" header="Name" />
+          <Column bindTo="role" header="Role" />
+        </Table>
+
+        <Heading level="h2" value="Multi-Row Selection" />
+        <Text>Selected: {multiSel}</Text>
+        <Table
+          testId="multi-select-table"
+          rowsSelectable="true"
+          enableMultiRowSelection="true"
+          onSelectionDidChange="(sel) => multiSel = sel.map(r => r.name).join(', ')"
+          data='{[
+            { id: 1, name: "Apples", quantity: 5, unit: "pieces" },
+            { id: 2, name: "Bananas", quantity: 6, unit: "pieces" },
+            { id: 3, name: "Carrots", quantity: 100, unit: "grams" },
+            { id: 4, name: "Spinach", quantity: 1, unit: "bunch" },
+            { id: 5, name: "Milk", quantity: 10, unit: "liter" },
+            { id: 6, name: "Cheese", quantity: 200, unit: "grams" }
+          ]}'>
+          <Column bindTo="name" header="Item" />
+          <Column bindTo="quantity" header="Qty" />
+          <Column bindTo="unit" header="Unit" />
+        </Table>
+
+      </VStack>
+    </Page>
+
+    <Page url="/tree">
+      <VStack var.treeSel="" padding="$space-4" gap="$space-4">
+
+        <Heading level="h2" value="Tree Selection" />
+        <Text>Selected: {treeSel}</Text>
+        <Tree
+          testId="selection-tree"
+          dataFormat="flat"
+          defaultExpanded="all"
+          onSelectionDidChange="(e) => treeSel = e.selectedNode ? e.selectedNode.name : '(none)'"
+          data='{[
+            { id: "docs", icon: "folder", name: "Documents", parentId: null },
+            { id: "reports", icon: "folder", name: "Reports", parentId: "docs" },
+            { id: "q1", icon: "code", name: "Q1 Report", parentId: "reports" },
+            { id: "q2", icon: "code", name: "Q2 Report", parentId: "reports" },
+            { id: "invoices", icon: "folder", name: "Invoices", parentId: "docs" },
+            { id: "inv1", icon: "code", name: "Invoice 001", parentId: "invoices" },
+            { id: "inv2", icon: "code", name: "Invoice 002", parentId: "invoices" },
+            { id: "projects", icon: "folder", name: "Projects", parentId: null },
+            { id: "web", icon: "folder", name: "Web Apps", parentId: "projects" },
+            { id: "ecom", icon: "code", name: "E-commerce", parentId: "web" },
+            { id: "dash", icon: "code", name: "Dashboard", parentId: "web" }
+          ]}' />
+
+      </VStack>
+    </Page>
+
+  </Pages>
+
+  <ModalDialog id="inspectorDialog" title="XMLUI Inspector" minWidth="85vw" minHeight="85vh">
+    <IFrame src="xs-diff.html" width="100%" height="80vh" />
+  </ModalDialog>
+
+</App>

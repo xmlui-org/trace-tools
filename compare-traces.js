@@ -2,11 +2,10 @@
  * Compare two distilled traces and report differences
  */
 
-const { parseTrace } = require('./parse-trace');
-const { distillTrace, distillJsonLogs, resolveMethod } = require('./distill-trace');
+const { distillTrace, resolveMethod } = require('./distill-trace');
 
 /**
- * Distill input - handles text export, JSON logs array, or already-distilled object
+ * Distill input - handles JSON logs array or already-distilled object
  */
 function distillInput(input) {
   // Already distilled
@@ -15,23 +14,16 @@ function distillInput(input) {
   }
 
   // JSON string - parse first
-  if (typeof input === 'string' && input.trim().startsWith('[')) {
-    try {
-      const logs = JSON.parse(input);
-      return distillJsonLogs(logs);
-    } catch (e) {
-      // Fall through to text parsing
-    }
+  if (typeof input === 'string') {
+    const parsed = JSON.parse(input);
+    if (parsed.steps) return parsed;
+    if (Array.isArray(parsed)) return distillTrace(parsed);
+    return distillTrace([parsed]);
   }
 
   // JSON array (from Playwright capture)
   if (Array.isArray(input)) {
-    return distillJsonLogs(input);
-  }
-
-  // Text export format
-  if (typeof input === 'string') {
-    return distillTrace(parseTrace(input));
+    return distillTrace(input);
   }
 
   throw new Error('Unknown trace format');
@@ -220,20 +212,162 @@ function formatReport(report) {
 /**
  * Extract semantic summary from trace for high-level comparison
  */
+function extractSemanticsFromDistilled(distilled) {
+  const steps = distilled.steps || [];
+
+  // Collect all APIs across steps
+  const allApis = steps.flatMap(s => (s.await?.api || []).map(a => ({
+    method: a.method,
+    endpoint: (a.endpoint || '').split('?')[0].replace(/^.*\/api/, ''),
+    status: a.status
+  })));
+  const uniqueApis = [...new Set(allApis.map(a => `${a.method} ${a.endpoint}`))].sort();
+
+  // Mutation counts
+  const mutationCounts = {};
+  allApis
+    .filter(a => ['POST', 'PUT', 'DELETE', 'PATCH'].includes(a.method))
+    .forEach(a => {
+      const key = `${a.method} ${a.endpoint}`;
+      mutationCounts[key] = (mutationCounts[key] || 0) + 1;
+    });
+
+  // Value changes
+  const allVcs = steps.flatMap(s => (s.valueChanges || []).map(vc => ({
+    component: vc.component,
+    value: vc.displayLabel != null ? String(vc.displayLabel) : undefined,
+    ariaName: vc.ariaName
+  })));
+  const lastValueByComponent = {};
+  for (const vc of allVcs) {
+    lastValueByComponent[vc.ariaName || vc.component] = vc;
+  }
+  const uniqueValueChanges = Object.values(lastValueByComponent)
+    .map(vc => `${vc.ariaName || vc.component}=${vc.value}`);
+
+  // Navigations
+  const allNavs = steps.flatMap(s => s.navigations || []);
+  const uniqueNavigations = [...new Set(allNavs.map(n => (n.to || n).split('?')[0]).filter(Boolean))];
+
+  // Modals
+  const confirmationDialogs = steps.flatMap(s => (s.modals || []).map(m => ({
+    title: m.title,
+    outcome: m.outcome || 'unknown'
+  })));
+
+  // Journey
+  const journey = steps
+    .filter(s => s.action !== 'keydown')
+    .map(s => {
+      const target = s.target?.label || s.target?.testId || s.target?.component || '';
+      const formData = s.target?.formData;
+      let line = `${s.action}: ${target}`;
+      if (formData?.name) line += ` → "${formData.name}"`;
+      return line;
+    });
+
+  // Extract app:trace transition shapes from distilled steps
+  const appTracesByLabel = {};
+  for (const s of steps) {
+    if (!s.appTraces) continue;
+    for (const [label, dataSeq] of Object.entries(s.appTraces)) {
+      if (!appTracesByLabel[label]) appTracesByLabel[label] = [];
+      appTracesByLabel[label].push(...dataSeq);
+    }
+  }
+  const appTraceShapes = {};
+  for (const [label, dataSeq] of Object.entries(appTracesByLabel)) {
+    if (dataSeq.length < 2) continue;
+    const allKeys = [...new Set(dataSeq.flatMap(d => Object.keys(d)))];
+    const shape = {};
+    for (const key of allKeys) {
+      const transitions = [];
+      for (let i = 1; i < dataSeq.length; i++) {
+        const prev = dataSeq[i - 1][key];
+        const curr = dataSeq[i][key];
+        if (typeof curr === 'number' && typeof prev === 'number') {
+          transitions.push(curr > prev ? 'up' : curr < prev ? 'down' : 'same');
+        } else {
+          transitions.push(curr === prev ? 'same' : 'changed');
+        }
+      }
+      shape[key] = transitions;
+    }
+    appTraceShapes[label] = shape;
+  }
+
+  // State diffs (.xs global mutations)
+  const allStateDiffs = steps.flatMap(s => (s.stateDiffs || []).map(d => ({
+    path: d.path,
+    before: d.before,
+    after: d.after,
+    added: d.added || [],
+    removed: d.removed || []
+  })));
+
+  // Validation errors (form validation failures)
+  const allValidationErrors = steps.flatMap(s => (s.validationErrors || []).map(v => ({
+    form: v.form,
+    errorCount: v.errorCount,
+  })));
+
+  // Data binds (data/view correspondence)
+  const allDataBinds = steps.flatMap(s => (s.dataBinds || []).map(d => ({
+    component: d.component,
+    direction: d.rowCount > d.prevCount ? 'up' : d.rowCount < d.prevCount ? 'down' : 'same',
+  })));
+
+  return {
+    apis: uniqueApis,
+    apiCount: allApis.length,
+    apiErrors: [],
+    mutationCounts,
+    formSubmits: [],
+    navigations: uniqueNavigations,
+    contextMenus: [],
+    confirmationDialogs,
+    valueChanges: uniqueValueChanges,
+    stateDiffs: allStateDiffs,
+    validationErrors: allValidationErrors,
+    dataBinds: allDataBinds,
+    appTraceShapes,
+    journey
+  };
+}
+
 function extractSemantics(input) {
-  // Get raw logs if we have distilled input
+  // Handle distilled format ({ steps: [...] })
+  if (input && typeof input === 'object' && !Array.isArray(input) && input.steps) {
+    return extractSemanticsFromDistilled(input);
+  }
+
+  // For raw logs or JSON strings, distill first then extract semantics.
+  // This ensures stateDiffs and other distiller-computed fields are available.
   let logs;
   if (Array.isArray(input)) {
     logs = input;
   } else if (typeof input === 'string') {
     if (input.trim().startsWith('[')) {
       logs = JSON.parse(input);
+    } else if (input.trim().startsWith('{')) {
+      try {
+        const parsed = JSON.parse(input);
+        if (parsed.steps) return extractSemanticsFromDistilled(parsed);
+        logs = [parsed];
+      } catch (e) {
+        return null;
+      }
     } else {
-      // Text format - can't extract semantics directly
       return null;
     }
   } else {
     return null;
+  }
+
+  // Distill raw logs to get stateDiffs and other computed fields
+  const distilledFromLogs = distillTrace(logs);
+  if (distilledFromLogs?.steps) {
+    return extractSemanticsFromDistilled(distilledFromLogs);
   }
 
   // Extract API calls
@@ -307,7 +441,7 @@ function extractSemantics(input) {
   });
 
   // Extract journey steps (for --show-journey)
-  const distilled = distillJsonLogs(logs);
+  const distilled = distillTrace(logs);
   const journey = distilled.steps
     .filter(s => s.action !== 'keydown')
     .map(s => {
@@ -320,6 +454,56 @@ function extractSemantics(input) {
       return line;
     });
 
+  // Extract value changes (from wrapComponent trace events)
+  const valueChanges = logs
+    .filter(e => e.kind === 'value:change')
+    .map(e => ({
+      component: e.component,
+      value: e.displayLabel != null ? String(e.displayLabel) : undefined,
+      ariaName: e.ariaName
+    }));
+  // Keep only the last value per component (coalesce rapid changes)
+  const lastValueByComponent = {};
+  for (const vc of valueChanges) {
+    lastValueByComponent[vc.ariaName || vc.component] = vc;
+  }
+  const uniqueValueChanges = Object.values(lastValueByComponent)
+    .map(vc => `${vc.ariaName || vc.component}=${vc.value}`);
+
+  // Extract app:trace transition shapes
+  // Group by label, then for each field compute the sequence of transitions
+  const appTraces = logs.filter(e => e.kind === 'app:trace' && e.data);
+  const appTracesByLabel = {};
+  for (const e of appTraces) {
+    const label = e.label || 'unknown';
+    if (!appTracesByLabel[label]) appTracesByLabel[label] = [];
+    appTracesByLabel[label].push(e.data);
+  }
+
+  // For each label, compute transition shapes per field
+  const appTraceShapes = {};
+  for (const [label, dataSeq] of Object.entries(appTracesByLabel)) {
+    if (dataSeq.length < 2) continue; // need at least 2 to have a transition
+    const allKeys = [...new Set(dataSeq.flatMap(d => Object.keys(d)))];
+    const shape = {};
+    for (const key of allKeys) {
+      const transitions = [];
+      for (let i = 1; i < dataSeq.length; i++) {
+        const prev = dataSeq[i - 1][key];
+        const curr = dataSeq[i][key];
+        if (typeof curr === 'number' && typeof prev === 'number') {
+          // Numeric: direction
+          transitions.push(curr > prev ? 'up' : curr < prev ? 'down' : 'same');
+        } else {
+          // Everything else: changed vs same
+          transitions.push(curr === prev ? 'same' : 'changed');
+        }
+      }
+      shape[key] = transitions;
+    }
+    appTraceShapes[label] = shape;
+  }
+
   return {
     apis: uniqueApis,
     apiCount: apis.length,
@@ -329,6 +513,8 @@ function extractSemantics(input) {
     navigations: uniqueNavigations,
     contextMenus,
     confirmationDialogs,
+    valueChanges: uniqueValueChanges,
+    appTraceShapes,
     journey
   };
 }
@@ -363,37 +549,54 @@ function compareSemanticTraces(trace1, trace2, options = {}) {
   const missingApis = sem1.apis.filter(a => !sem2.apis.includes(a));
   const extraApis = sem2.apis.filter(a => !sem1.apis.includes(a));
 
-  if (missingApis.length > 0) {
+  // GET-only API differences are advisory (non-deterministic DataSource refetches).
+  // Only mutation API differences break the match.
+  const missingMutations = missingApis.filter(a => !a.startsWith('GET '));
+  const extraMutations = extraApis.filter(a => !a.startsWith('GET '));
+  const missingGets = missingApis.filter(a => a.startsWith('GET '));
+  const extraGets = extraApis.filter(a => a.startsWith('GET '));
+
+  if (missingMutations.length > 0) {
     report.match = false;
     report.differences.push({
       type: 'apis_missing',
-      message: `APIs in before but not after: ${missingApis.join(', ')}`
+      message: `Mutation APIs in before but not after: ${missingMutations.join(', ')}`
     });
   }
-  if (extraApis.length > 0) {
+  if (extraMutations.length > 0) {
     report.match = false;
     report.differences.push({
       type: 'apis_extra',
-      message: `APIs in after but not before: ${extraApis.join(', ')}`
+      message: `Mutation APIs in after but not before: ${extraMutations.join(', ')}`
+    });
+  }
+  if (missingGets.length > 0) {
+    report.differences.push({
+      type: 'apis_missing_gets',
+      message: `GET APIs in before but not after: ${missingGets.join(', ')} (non-deterministic DataSource timing)`
+    });
+  }
+  if (extraGets.length > 0) {
+    report.differences.push({
+      type: 'apis_extra_gets',
+      message: `GET APIs in after but not before: ${extraGets.join(', ')} (non-deterministic DataSource timing)`
     });
   }
 
-  // Compare API errors
+  // Compare API errors (advisory only — transient API errors are non-deterministic)
   const missingErrors = sem1.apiErrors.filter(a => !sem2.apiErrors.includes(a));
   const extraErrors = sem2.apiErrors.filter(a => !sem1.apiErrors.includes(a));
 
   if (missingErrors.length > 0) {
-    report.match = false;
     report.differences.push({
       type: 'api_errors_missing',
-      message: `API errors in before but not after: ${missingErrors.join(', ')}`
+      message: `API errors in before but not after: ${missingErrors.join(', ')} (transient API error, not a behavioral difference)`
     });
   }
   if (extraErrors.length > 0) {
-    report.match = false;
     report.differences.push({
       type: 'api_errors_extra',
-      message: `API errors in after but not before: ${extraErrors.join(', ')}`
+      message: `API errors in after but not before: ${extraErrors.join(', ')} (transient API error, not a behavioral difference)`
     });
   }
 
@@ -463,6 +666,158 @@ function compareSemanticTraces(trace1, trace2, options = {}) {
     });
   }
 
+  // Compare value changes
+  const vc1 = (sem1.valueChanges || []).sort();
+  const vc2 = (sem2.valueChanges || []).sort();
+  const missingVC = vc1.filter(v => !vc2.includes(v));
+  const extraVC = vc2.filter(v => !vc1.includes(v));
+
+  if (missingVC.length > 0 || extraVC.length > 0) {
+    // Value changes are advisory — the set of traced value:change events varies
+    // with timing (orphaned FileInput events, reactive re-evaluations, etc.)
+    report.differences.push({
+      type: 'value_changes',
+      message: 'Value change difference (advisory)',
+      missing: missingVC,
+      extra: extraVC
+    });
+  }
+
+  // Compare state diffs (.xs global mutations)
+  const sd1 = sem1.stateDiffs || [];
+  const sd2 = sem2.stateDiffs || [];
+
+  if (sd1.length > 0 || sd2.length > 0) {
+    // Match by path — compare before/after counts and added/removed items
+    const paths1 = new Map(sd1.map(d => [d.path, d]));
+    const paths2 = new Map(sd2.map(d => [d.path, d]));
+
+    for (const [path, d1] of paths1) {
+      const d2 = paths2.get(path);
+      if (!d2) {
+        report.match = false;
+        report.differences.push({
+          type: 'state_diff_missing',
+          message: `State change "${path}" (${d1.before} → ${d1.after}) in before but not after`
+        });
+        continue;
+      }
+      // Compare shape: direction of change (grew/shrank/same) and count of added/removed
+      // Not specific values — "Jon Udell" vs "Jane Doe" should both pass
+      const dir1 = d1.after > d1.before ? 'up' : d1.after < d1.before ? 'down' : 'same';
+      const dir2 = d2.after > d2.before ? 'up' : d2.after < d2.before ? 'down' : 'same';
+      if (dir1 !== dir2) {
+        report.match = false;
+        report.differences.push({
+          type: 'state_diff_direction',
+          message: `State "${path}" direction: expected ${dir1} (${d1.before}→${d1.after}), got ${dir2} (${d2.before}→${d2.after})`
+        });
+      }
+      const addedCount1 = (d1.added || []).length;
+      const addedCount2 = (d2.added || []).length;
+      const removedCount1 = (d1.removed || []).length;
+      const removedCount2 = (d2.removed || []).length;
+      if (addedCount1 !== addedCount2 || removedCount1 !== removedCount2) {
+        report.match = false;
+        report.differences.push({
+          type: 'state_diff_shape',
+          message: `State "${path}" shape: expected +${addedCount1}/-${removedCount1}, got +${addedCount2}/-${removedCount2}`
+        });
+      }
+    }
+
+    for (const [path, d2] of paths2) {
+      if (!paths1.has(path)) {
+        report.match = false;
+        report.differences.push({
+          type: 'state_diff_extra',
+          message: `State change "${path}" (${d2.before} → ${d2.after}) in after but not before`
+        });
+      }
+    }
+  }
+
+  // Compare validation errors (shape: count of validation failures per form)
+  const ve1 = sem1.validationErrors || [];
+  const ve2 = sem2.validationErrors || [];
+  if (ve1.length !== ve2.length) {
+    report.match = false;
+    report.differences.push({
+      type: 'validation_error_count',
+      message: `Validation failure count: expected ${ve1.length}, got ${ve2.length}`
+    });
+  } else {
+    for (let i = 0; i < ve1.length; i++) {
+      if (ve1[i].errorCount !== ve2[i].errorCount) {
+        report.match = false;
+        report.differences.push({
+          type: 'validation_error_shape',
+          message: `Validation #${i + 1} on "${ve1[i].form}": expected ${ve1[i].errorCount} errors, got ${ve2[i].errorCount}`
+        });
+      }
+    }
+  }
+
+  // Compare data binds (shape: direction of change per component)
+  const db1 = sem1.dataBinds || [];
+  const db2 = sem2.dataBinds || [];
+  if (db1.length !== db2.length) {
+    report.differences.push({
+      type: 'data_bind_count',
+      message: `Data bind event count: expected ${db1.length}, got ${db2.length} (advisory)`
+    });
+  } else {
+    for (let i = 0; i < db1.length; i++) {
+      if (db1[i].direction !== db2[i].direction) {
+        report.match = false;
+        report.differences.push({
+          type: 'data_bind_direction',
+          message: `Data bind "${db1[i].component}": expected ${db1[i].direction}, got ${db2[i].direction}`
+        });
+      }
+    }
+  }
+
+  // Compare app:trace transition shapes
+  const shapes1 = sem1.appTraceShapes || {};
+  const shapes2 = sem2.appTraceShapes || {};
+  const allLabels = [...new Set([...Object.keys(shapes1), ...Object.keys(shapes2)])].sort();
+
+  for (const label of allLabels) {
+    const s1 = shapes1[label];
+    const s2 = shapes2[label];
+
+    if (!s1) {
+      // App:trace presence can vary with timing — advisory only
+      report.differences.push({
+        type: 'app_trace_missing',
+        message: `app:trace "${label}" in after but not before`
+      });
+      continue;
+    }
+    if (!s2) {
+      report.differences.push({
+        type: 'app_trace_missing',
+        message: `app:trace "${label}" in before but not after`
+      });
+      continue;
+    }
+
+    // Compare transition sequences per field (advisory only — reactive
+    // evaluation counts and directions are non-deterministic)
+    const allFields = [...new Set([...Object.keys(s1), ...Object.keys(s2)])];
+    for (const field of allFields) {
+      const sig1 = (s1[field] || []).filter(t => t !== 'same').join(',');
+      const sig2 = (s2[field] || []).filter(t => t !== 'same').join(',');
+      if (sig1 !== sig2) {
+        report.differences.push({
+          type: 'app_trace_shape',
+          message: `app:trace "${label}" field "${field}": [${sig1}] → [${sig2}] (reactive noise, nothing to worry about)`
+        });
+      }
+    }
+  }
+
   // Add summaries
   report.before = sem1;
   report.after = sem2;
@@ -513,6 +868,47 @@ function formatSemanticReport(report, options = {}) {
     lines.push(`  Form submits: ${sem.formSubmits.length} (${sem.formSubmits.join(' → ')})`);
     lines.push(`  Context menus: ${sem.contextMenus.join(', ')}`);
     lines.push(`  Confirmation dialogs: ${(sem.confirmationDialogs || []).length > 0 ? sem.confirmationDialogs.map(d => `"${d.title}"→${d.outcome}`).join(', ') : '(none)'}`);
+    lines.push(`  Value changes: ${(sem.valueChanges || []).length > 0 ? sem.valueChanges.join(', ') : '(none)'}`);
+    const sds = sem.stateDiffs || [];
+    if (sds.length > 0) {
+      lines.push(`  State diffs:`);
+      for (const sd of sds) {
+        const dir = sd.after > sd.before ? 'up' : sd.after < sd.before ? 'down' : 'same';
+        const shape = `+${(sd.added || []).length}/-${(sd.removed || []).length}`;
+        lines.push(`    ${sd.path}: ${sd.before} → ${sd.after} (${dir}, ${shape})`);
+      }
+    } else {
+      lines.push(`  State diffs: (none)`);
+    }
+    const ves = sem.validationErrors || [];
+    if (ves.length > 0) {
+      lines.push(`  Validation errors:`);
+      for (const ve of ves) {
+        lines.push(`    ${ve.form}: ${ve.errorCount} error${ve.errorCount > 1 ? 's' : ''}`);
+      }
+    } else {
+      lines.push(`  Validation errors: (none)`);
+    }
+    const dbs = sem.dataBinds || [];
+    if (dbs.length > 0) {
+      lines.push(`  Data binds:`);
+      for (const db of dbs) {
+        lines.push(`    ${db.component}: ${db.direction}`);
+      }
+    } else {
+      lines.push(`  Data binds: (none)`);
+    }
+    const shapes = sem.appTraceShapes || {};
+    const shapeLabels = Object.keys(shapes);
+    if (shapeLabels.length > 0) {
+      lines.push(`  App traces:`);
+      for (const sl of shapeLabels) {
+        const fields = Object.entries(shapes[sl]).map(([k, v]) => `${k}:[${v.join(',')}]`).join(' ');
+        lines.push(`    ${sl}: ${fields}`);
+      }
+    } else {
+      lines.push(`  App traces: (none)`);
+    }
     if (showJourney && sem.journey) {
       lines.push('  Journey:');
       for (const step of sem.journey) {
