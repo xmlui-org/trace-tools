@@ -26,6 +26,55 @@ Then navigate to `/xs-diff.html` in the running app, or embed the inspector in-a
 
 With tracing enabled, every interaction — click, form fill, API call, state change — is captured as a semantic trace event. The inspector shows these as a navigable timeline.
 
+### Exporting trace JSON
+
+The inspector's **Export** button writes the captured trace to JSON. It tries three paths in order, picking whichever works in the current environment:
+
+1. **Tauri direct** — if `window.__TAURI__.core.invoke` is reachable (same-origin Tauri app), it calls a `save_trace_export` command.
+2. **Host-shell bridge** — `postMessage` to `window.top` / `window.parent` and wait for a reply. Useful when the inspector is loaded into a cross-origin iframe (e.g., a Tauri shell that hosts the app over `http://127.0.0.1:<port>` while the parent shell runs on a different origin).
+3. **Browser download** — final fallback; writes a Blob to the user's downloads.
+
+Vanilla browser users always get path 3 (no behavior change). Shell authors who want native filesystem writes implement the small bridge protocol below.
+
+#### Host-bridge protocol
+
+When the inspector wants to export, it sends:
+
+```js
+window.top.postMessage({
+  type: "right-pane",
+  kind: "save-trace-export",
+  requestId: "export-...",   // opaque, echo back in the reply
+  filename: "xs-trace-...json",
+  content: "...",            // JSON string body
+  mimeType: "application/json"
+}, "*");
+```
+
+The host should write the file (typically `~/Downloads/<filename>`) and reply:
+
+```js
+sourceWindow.postMessage({
+  type: "save-trace-export-result",
+  requestId: "export-...",
+  ok: true,
+  path: "/absolute/path/to/written/file"
+}, "*");
+```
+
+Or, on failure:
+
+```js
+sourceWindow.postMessage({
+  type: "save-trace-export-result",
+  requestId: "export-...",
+  ok: false,
+  error: "human-readable message"
+}, "*");
+```
+
+The inspector waits up to 4 seconds for a reply; if none arrives it falls through to the browser download. Implementing this in a Tauri shell takes ~20 lines of Rust + JS dispatch code.
+
 ## Name your components with aria-label
 
 The single most impactful thing you can do for observability (and accessibility) is give components meaningful names via `aria-label`. Without it, traces show the component type but not which instance:

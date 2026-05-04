@@ -361,6 +361,17 @@
         100% { background-color: transparent; }
       }
 
+      /* Button flash to confirm export succeeded — the status text is
+         easy to miss, the button itself is what the user just clicked. */
+      @keyframes button-flash-success {
+        0%   { background-color: rgba(34, 197, 94, 0.85); color: #064e3b; }
+        30%  { background-color: rgba(34, 197, 94, 0.85); color: #064e3b; }
+        100% { background-color: transparent; color: inherit; }
+      }
+      #exportJson.flash-success {
+        animation: button-flash-success 1.2s ease-out;
+      }
+
       .highlight-line {
         display: block;
         background: rgba(255, 200, 0, 0.2);
@@ -728,6 +739,7 @@
       <button id="clear">Clear</button>
       <button id="test">Test</button>
       <button id="exportJson">Export</button>
+      <span id="exportStatus" style="font-size: var(--font-sm); color: var(--color-text-muted);"></span>
     </div>
     <div id="diff"></div>
 
@@ -7078,33 +7090,153 @@
         URL.revokeObjectURL(url);
       }
 
-      document.getElementById("exportJson").addEventListener("click", () => {
-        const rawLogs = ((window.parent && window.parent._xsLogs) || []).slice().sort((a, b) => (a.perfTs || a.ts || 0) - (b.perfTs || b.ts || 0));
-        if (rawLogs.length === 0) {
-          alert("No logs found.");
-          return;
-        }
-        const skipKeys = new Set(['_targetInst', '_debugOwner', '_debugSource', 'stateNode', 'nativeEvent', 'view', 'target', 'currentTarget', 'relatedTarget', '__reactFiber$', '__reactProps$']);
-        const stripKeys = new Set(['beforeJson', 'afterJson', 'diffText', 'text']);
-        const jsonEntries = rawLogs.map(entry => {
-          const seen = new WeakSet();
-          return JSON.stringify(entry, (key, value) => {
-            if (value instanceof Node || value instanceof Window) return undefined;
-            if (typeof value === 'function') return undefined;
-            if (skipKeys.has(key)) return undefined;
-            if (stripKeys.has(key)) return undefined;
-            if (key.startsWith('__react')) return undefined;
-            if (key === 'diffPretty' && typeof value === 'string' && value.length > 200) return undefined;
-            if (typeof value === 'object' && value !== null) {
-              if (seen.has(value)) return '[circular]';
-              seen.add(value);
+      // Best-effort lookup of a Tauri invoke handle reachable from this
+      // iframe. xmlui's Inspector usually loads xs-diff.html inside an
+      // iframe-in-iframe, so __TAURI__ may live on parent or top.
+      function getTauriInvoke() {
+        try {
+          if (window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === "function") {
+            return window.__TAURI__.core.invoke.bind(window.__TAURI__.core);
+          }
+        } catch (e) {}
+        try {
+          if (window.parent && window.parent.__TAURI__ && window.parent.__TAURI__.core &&
+              typeof window.parent.__TAURI__.core.invoke === "function") {
+            return window.parent.__TAURI__.core.invoke.bind(window.parent.__TAURI__.core);
+          }
+        } catch (e) {}
+        try {
+          if (window.top && window.top.__TAURI__ && window.top.__TAURI__.core &&
+              typeof window.top.__TAURI__.core.invoke === "function") {
+            return window.top.__TAURI__.core.invoke.bind(window.top.__TAURI__.core);
+          }
+        } catch (e) {}
+        return null;
+      }
+
+      function setExportStatus(message, isError) {
+        const el = document.getElementById("exportStatus");
+        if (!el) return;
+        el.textContent = message || "";
+        el.style.color = isError ? "var(--color-error)" : "var(--color-text-muted)";
+      }
+
+      function flashExportButton() {
+        const btn = document.getElementById("exportJson");
+        if (!btn) return;
+        btn.classList.remove("flash-success");
+        // Force reflow so the animation can re-fire on subsequent clicks.
+        void btn.offsetWidth;
+        btn.classList.add("flash-success");
+      }
+
+      // Host-shell bridge: when xs-diff.html is loaded inside a desktop
+      // shell (Tauri/Electron) on a different origin from the host, the
+      // host can intercept this postMessage and write the file natively.
+      // Protocol documented in GUIDE-APP-DEVELOPER.md.
+      function requestShellExport(filename, content, mimeType) {
+        return new Promise((resolve, reject) => {
+          const hostWindow = window.top && window.top !== window ? window.top : window.parent;
+          if (!hostWindow || typeof hostWindow.postMessage !== "function") {
+            reject(new Error("host window is unavailable"));
+            return;
+          }
+
+          const requestId = `export-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          const timer = setTimeout(() => {
+            window.removeEventListener("message", onMessage);
+            reject(new Error("host export timed out"));
+          }, 4000);
+
+          function onMessage(event) {
+            const data = event.data;
+            if (!data || data.type !== "save-trace-export-result" || data.requestId !== requestId) {
+              return;
             }
-            return value;
-          });
+            clearTimeout(timer);
+            window.removeEventListener("message", onMessage);
+            if (data.ok) resolve(data.path);
+            else reject(new Error(data.error || "host export failed"));
+          }
+
+          window.addEventListener("message", onMessage);
+          hostWindow.postMessage(
+            {
+              type: "right-pane",
+              kind: "save-trace-export",
+              requestId: requestId,
+              filename: filename,
+              content: content,
+              mimeType: mimeType
+            },
+            "*"
+          );
         });
-        const jsonContent = '[\n  ' + jsonEntries.join(',\n  ') + '\n]';
-        const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, "");
-        downloadFile(`xs-trace-${timestamp}.json`, jsonContent, "application/json");
+      }
+
+      document.getElementById("exportJson").addEventListener("click", async () => {
+        try {
+          setExportStatus("Preparing export...", false);
+          const rawLogs = ((window.parent && window.parent._xsLogs) || []).slice().sort((a, b) => (a.perfTs || a.ts || 0) - (b.perfTs || b.ts || 0));
+          if (rawLogs.length === 0) {
+            setExportStatus("No logs found.", true);
+            return;
+          }
+          const skipKeys = new Set(['_targetInst', '_debugOwner', '_debugSource', 'stateNode', 'nativeEvent', 'view', 'target', 'currentTarget', 'relatedTarget', '__reactFiber$', '__reactProps$']);
+          const stripKeys = new Set(['beforeJson', 'afterJson', 'diffText', 'text']);
+          const jsonEntries = rawLogs.map(entry => {
+            const seen = new WeakSet();
+            return JSON.stringify(entry, (key, value) => {
+              if (typeof Node !== "undefined" && value instanceof Node) return undefined;
+              if (typeof Window !== "undefined" && value instanceof Window) return undefined;
+              if (typeof value === 'bigint') return value.toString();
+              if (typeof value === 'function') return undefined;
+              if (skipKeys.has(key)) return undefined;
+              if (stripKeys.has(key)) return undefined;
+              if (key.startsWith('__react')) return undefined;
+              if (key === 'diffPretty' && typeof value === 'string' && value.length > 200) return undefined;
+              if (typeof value === 'object' && value !== null) {
+                if (seen.has(value)) return '[circular]';
+                seen.add(value);
+              }
+              return value;
+            });
+          });
+          const jsonContent = '[\n  ' + jsonEntries.join(',\n  ') + '\n]';
+          const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, "");
+          const filename = `xs-trace-${timestamp}.json`;
+          const invoke = getTauriInvoke();
+
+          if (invoke) {
+            setExportStatus("Saving via Tauri...", false);
+            const savedPath = await invoke("save_trace_export", {
+              filename: filename,
+              content: jsonContent,
+              mimeType: "application/json",
+            });
+            setExportStatus(`Saved to ${savedPath}`, false);
+            flashExportButton();
+            return;
+          }
+
+          setExportStatus("Saving via host bridge...", false);
+          try {
+            const savedPath = await requestShellExport(filename, jsonContent, "application/json");
+            setExportStatus(`Saved to ${savedPath}`, false);
+            flashExportButton();
+            return;
+          } catch (bridgeErr) {
+            console.warn("host bridge export failed, falling back to browser download", bridgeErr);
+          }
+
+          setExportStatus("Downloading via browser...", false);
+          downloadFile(filename, jsonContent, "application/json");
+          setExportStatus(`Download started for ${filename}`, false);
+          flashExportButton();
+        } catch (err) {
+          console.error("exportJson failed", err);
+          setExportStatus(`Export failed: ${err && err.message ? err.message : err}`, true);
+        }
       });
 
       // Handle hash navigation - expand parent trace-group and highlight target
