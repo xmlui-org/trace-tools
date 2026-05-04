@@ -81,6 +81,18 @@
         flex-wrap: nowrap;
       }
 
+      .export-status {
+        padding: var(--space-2) var(--space-4);
+        font-size: var(--font-sm);
+        color: var(--color-text-muted);
+        background: var(--color-bg-subtle);
+        border-bottom: 1px solid var(--color-border);
+        text-align: right;
+      }
+      .export-status:empty {
+        display: none;
+      }
+
       .spacer { flex: 1 1 auto; }
 
       label { font-size: var(--font-base); color: var(--color-text); }
@@ -739,8 +751,8 @@
       <button id="clear">Clear</button>
       <button id="test">Test</button>
       <button id="exportJson">Export</button>
-      <span id="exportStatus" style="font-size: var(--font-sm); color: var(--color-text-muted);"></span>
     </div>
+    <div id="exportStatus" class="export-status"></div>
     <div id="diff"></div>
 
     <!-- File Preview Modal -->
@@ -7114,11 +7126,22 @@
         return null;
       }
 
+      let exportStatusTimer = null;
       function setExportStatus(message, isError) {
         const el = document.getElementById("exportStatus");
         if (!el) return;
+        if (exportStatusTimer) {
+          clearTimeout(exportStatusTimer);
+          exportStatusTimer = null;
+        }
         el.textContent = message || "";
         el.style.color = isError ? "var(--color-error)" : "var(--color-text-muted)";
+        if (message) {
+          exportStatusTimer = setTimeout(() => {
+            el.textContent = "";
+            exportStatusTimer = null;
+          }, 4000);
+        }
       }
 
       function flashExportButton() {
