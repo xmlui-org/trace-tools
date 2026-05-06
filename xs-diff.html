@@ -200,7 +200,7 @@
       color: var(--color-text-muted);
     }
 
-    .trace-header.expanded .arrow {
+    .trace-group.expanded .trace-header .arrow {
       transform: rotate(90deg);
     }
 
@@ -4750,16 +4750,13 @@
         if (parent.tagName === "DETAILS" && !parent.open) {
           parent.open = true;
         }
-        // Handle trace-group elements (custom expand/collapse)
+        // Handle trace-group elements (custom expand/collapse).
+        // Add "expanded" to both the group and its header so that the onclick
+        // toggle (which toggles both) stays in sync and can close normally.
         if (parent.classList && parent.classList.contains("trace-group") && !parent.classList.contains("expanded")) {
           parent.classList.add("expanded");
-          // Also rotate the arrow
-          const arrow = parent.querySelector(".trace-header .arrow");
-          if (arrow) arrow.style.transform = "rotate(90deg)";
-        }
-        // Handle trace-body that might be hidden
-        if (parent.classList && parent.classList.contains("trace-body")) {
-          parent.style.display = "block";
+          const header = parent.querySelector(".trace-header");
+          if (header) header.classList.add("expanded");
         }
         parent = parent.parentElement;
       }
