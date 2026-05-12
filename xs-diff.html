@@ -1782,6 +1782,16 @@
     // Load file and search for handler attribute in .xmlui, and function in .xs
     function setupHandlerSourceLoader(detailsEl, filePath, handlerName, componentLabel) {
       let loaded = false;
+      // Shift-click the summary to force a reload (clears loaded flag and file cache)
+      const summaryEl = detailsEl.querySelector("summary");
+      if (summaryEl) {
+        summaryEl.addEventListener("click", (e) => {
+          if (e.shiftKey) {
+            loaded = false;
+            sourceCache.delete(filePath);
+          }
+        });
+      }
       detailsEl.addEventListener("toggle", async () => {
         if (detailsEl.open && !loaded) {
           loaded = true;
@@ -1801,18 +1811,55 @@
                   const xmlui = new XmluiSource(source, filePath);
 
                   if (compLabel) {
-                    // Find specific handler on specific element
+                    // Try to find the specific handler on the element identified by compLabel.
+                    // compLabel is the component's id attribute when it matches, but it can also
+                    // be the visible label/placeholder text which won't match any id.
                     const handler = xmlui.findHandler(compLabel, eventName);
                     if (handler) {
                       matches.push({ lineNum: handler.line - 1, pattern: "handler-attr" }); // 0-indexed for formatMatches
                       if (!handlerValue) handlerValue = handler.value;
                     }
-                  } else {
-                    // Find all handlers matching eventName
+                  }
+
+                  // Pass 3 (before generic handler scan): when compLabel is set, locate the
+                  // component element by matching compLabel against named visible attributes
+                  // (placeholder, label, title). This MUST run before findHandlers so we don't
+                  // accidentally highlight a handler on a different component that happens to
+                  // share the same event type (e.g. another TextBox's onDidChange).
+                  if (matches.length === 0 && compLabel) {
+                    const searchAttrs = ["placeholder", "label", "title"];
+                    for (const attr of searchAttrs) {
+                      const el = xmlui.findByAttribute(attr, compLabel);
+                      if (el) {
+                        matches.push({ lineNum: el.startLine - 1, pattern: "element-decl" });
+                        break;
+                      }
+                    }
+                  }
+
+                  // Pass 2 (broad fallback): find all handlers of this event type in the file.
+                  // Only runs when compLabel is absent or didn't match any visible attribute above.
+                  if (matches.length === 0) {
                     const handlers = xmlui.findHandlers(eventName);
                     for (const h of handlers) {
                       matches.push({ lineNum: h.line - 1, pattern: "handler-attr" }); // 0-indexed
                       if (!handlerValue) handlerValue = h.value;
+                    }
+                  }
+
+                  // Last resort: raw-text search for compLabel as element text content
+                  // (e.g. <Button>Save</Button>) or as any other attribute value not covered above.
+                  if (matches.length === 0 && compLabel) {
+                    const escapedLabel = compLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                    // Match text content: ">Save<" style (same line, optional whitespace)
+                    const textContentRe = new RegExp(`>\\s*${escapedLabel}\\s*<`);
+                    // Match any attribute value: ="Save" or ='Save'
+                    const attrValueRe = new RegExp(`=["']${escapedLabel}["']`);
+                    for (let i = 0; i < lines.length; i++) {
+                      if (textContentRe.test(lines[i]) || attrValueRe.test(lines[i])) {
+                        matches.push({ lineNum: i, pattern: "text-search" });
+                        break;
+                      }
                     }
                   }
                 } catch (e) {
@@ -1951,8 +1998,20 @@
               }
 
               if (outputSections.length === 0) {
-                // No useful content found
-                codeEl.textContent = "// Source not found";
+                // Final fallback: use the ownerSource character range directly.
+                // This is always precise because XMLUI instruments the source location at
+                // trace-capture time — no text search needed.
+                const fbStart = parseInt(detailsEl.dataset.start, 10);
+                const fbEnd = parseInt(detailsEl.dataset.end, 10);
+                if (!isNaN(fbStart) && !isNaN(fbEnd) && fbEnd > fbStart) {
+                  const rangeSource = await fetchSourceRange(filePath, fbStart, fbEnd);
+                  if (rangeSource) {
+                    codeEl.textContent = rangeSource;
+                    return;
+                  }
+                }
+                // Absolute last resort
+                codeEl.textContent = `// Source not found\n// Searched for: ${componentLabel ? '"' + componentLabel + '"' : '(no label)'}\n// Event: ${handlerName}\n// File: ${filePath}`;
               } else {
                 codeEl.innerHTML = outputSections.join("\n")
                   .replace(/</g, "&lt;")
@@ -3997,6 +4056,10 @@
           // Interaction events - show the interaction type (click, contextmenu, etc.)
           const interactionType = e.interaction || "unknown";
           bodyHtml += `<div class="trace-event-header">interaction ${interactionType}${evt.label ? ` ${evt.label}` : ""}${metaInline}</div>`;
+          if (e.detail && Object.keys(e.detail).length > 0) {
+            const detailJson = JSON.stringify(e.detail, null, 2);
+            bodyHtml += `<details><summary>detail</summary><pre class="source-code">${detailJson.replace(/</g, "&lt;")}</pre></details>`;
+          }
         } else {
           const bootstrapBadge = e._bootstrap ? ` <span class="badge-bootstrap">bootstrap</span>` : "";
           const dedupCount = e._dedupCount || 1;
@@ -4011,14 +4074,16 @@
           // Show XMLUI source expander for events that carry source info
           if (evt.meta.hasSource && evt.meta.resolvedFile) {
             const [startChar, endChar] = evt.meta.sourceRange.split("-").map(Number);
-            if (e.kind && e.kind.startsWith("native:")) {
-              // Native events: plain source expander (event isn't declared in XMLUI markup)
+            if ((e.kind && e.kind.startsWith("native:")) || !e.eventName) {
+              // Native events and events without a specific handler name (e.g. data:bind):
+              // use the plain source range to show the component declaration in context.
               bodyHtml += `<details class="source-loader" data-file="${evt.meta.resolvedFile}" data-start="${startChar}" data-end="${endChar}">`;
             } else {
-              // value:change, focus:change, etc.: search for the handler attribute in source
-              const eventName = e.eventName || "";
+              // value:change, focus:change, etc.: search for the handler attribute in source.
+              // Also pass start/end so setupHandlerSourceLoader can fall back to the exact
+              // character range when all text-search heuristics fail.
               const componentLabel = e.componentLabel || "";
-              bodyHtml += `<details class="source-loader" data-file="${evt.meta.resolvedFile}" data-handler-name="${eventName}" data-component-label="${componentLabel}" data-search-handler="true">`;
+              bodyHtml += `<details class="source-loader" data-file="${evt.meta.resolvedFile}" data-handler-name="${e.eventName}" data-component-label="${componentLabel}" data-start="${startChar}" data-end="${endChar}" data-search-handler="true">`;
             }
             bodyHtml += `<summary>XMLUI Source</summary>`;
             bodyHtml += `<pre class="source-code">Click to load...</pre>`;
